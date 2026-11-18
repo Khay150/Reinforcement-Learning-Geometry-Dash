@@ -1,4 +1,4 @@
-# Geometry Dash RL: entorno Gymnasium + oráculo (nivel fijo)
+# Geometry Dash RL: entorno Gymnasium + oráculo + agentes PPO/DQN (nivel fijo)
 
 ## Estructura
 - `gd_env/physics.py`: dinámica determinista pura (cubo, gravedad, salto, colisiones). La usan el entorno **y** el oráculo.
@@ -6,7 +6,11 @@
 - `gd_env/env.py`: `GeometryDashEnv` (Gymnasium), registrado como `GeometryDash-v0`.
 - `gd_env/oracle.py`: planificador exacto (programación dinámica por capas de tick) + `OraclePolicy`.
 - `gd_env/render.py`: frames, GIF del episodio y mapa del recorrido (`record_episode`).
+- `agents/__init__.py`: expone la API de agentes (`make_train_env`, `build_model`, `evaluate_policy_phases`, `summarize`, `EVAL_PHASES`, `TRAIN_PHASE_RANGE`).
+- `agents/common.py`: `make_train_env` (con/sin fase aleatoria vía el wrapper `RandomPhase`), `build_model` (PPO/DQN con hiperparámetros iniciales), `load_model`.
+- `agents/evaluate.py`: `evaluate_policy_phases` (un episodio determinista por fase), `save_rows` (CSV) y `summarize` (tabla markdown entre seeds).
 - `scripts/run_oracle.py`, `scripts/record.py`, `tests/test_env.py`.
+- `scripts/train.py`: entrena PPO/DQN con varias seeds, evalúa y graba GIFs. `scripts/evaluate.py`: re-evalúa modelos guardados. `scripts/record.py --model ... --algo PPO`: GIF de un modelo suelto.
 
 ## Uso
 ```python
@@ -30,6 +34,49 @@ record_episode(env, OraclePolicy(env), "videos/oraculo.gif", "videos/oraculo_rec
 - `*_recorrido.png` muestra el nivel entero con el camino recorrido; si el agente muere, queda una cruz roja donde falló. Sirve para el informe y para comparar agentes.
 - En Colab: `from IPython.display import Image; Image("videos/ppo.gif")`.
 - También funciona `env.render()` con `render_mode="rgb_array"` (frame suelto) o `"ansi"` (texto).
+
+## Agentes: entrenamiento, evaluación y GIFs
+Instalación: `pip install -r requirements.txt` (instala Stable-Baselines3 y PyTorch).
+
+```bash
+# PPO y DQN, 3 seeds cada uno (observación `features` + MlpPolicy, recompensa por defecto)
+python scripts/train.py --algos ppo dqn --seeds 0 1 2 --timesteps 300000
+# prueba rápida (~30 s) para chequear que todo corre
+python scripts/train.py --algos ppo dqn --seeds 0 --timesteps 12000 --run-name humo
+# entrenar con fase de arranque aleatoria en vez de nivel fijo
+python scripts/train.py --algos ppo dqn --train-phase random --run-name features_random
+# re-evaluar modelos guardados (más fases, regrabar GIFs)
+python scripts/evaluate.py --run runs/features_fixed --n-phases 20 --gif
+# re-evaluar un modelo suelto
+python scripts/evaluate.py --model runs/features_fixed/ppo/seed0/model.zip --algo ppo
+```
+Cada agente deja en `runs/<run-name>/<algo>/seed<N>/`: `model.zip`, `monitor/` (curva de aprendizaje por entorno),
+`eval_fases.csv`, y `episodio_x0_<x0>.gif` + `*_recorrido.png` (fase por defecto x0=2.0 y, si falla alguna, la fase donde más progreso perdió).
+`runs/<run-name>/resumen.md` trae la tabla entre seeds y `config.json` los parámetros de la corrida.
+
+- **Evaluación**: 10 fases de arranque `x0 ∈ [2.0, 2.95]` (todas con solución comprobada por el oráculo), una política determinista por fase.
+  Se reportan éxito, progreso, retorno, saltos usados vs. los del oráculo, y dónde murió.
+- **Entrenamiento `--train-phase`**: `fixed` entrena siempre con x0=2.0 (mide cuánto generaliza a otras fases); `random` sortea x0 en cada episodio.
+- **Hiperparámetros** (`agents/common.py`): PPO `n_steps=256` × 8 entornos, red [64, 64], `ent_coef=0.01`; DQN `lr=1e-3`, buffer 100k, ε 1→0.05 en el 30% del entrenamiento. Son un punto de partida, no están tuneados.
+- Sólo `obs_mode="features"` con `MlpPolicy` por ahora; `grid`/`dict` necesitan el extractor CNN propio (ver nota para SB3 más abajo).
+- La recompensa se cambia pasando `reward_fn` en `make_train_env(..., reward_fn=...)` (`agents/common.py`) y en `evaluate_policy_phases(..., reward_fn=...)`.
+
+### Uso de los agentes desde Python (por ejemplo, en Colab)
+```python
+from agents import make_train_env, build_model, evaluate_policy_phases, summarize
+from agents.common import load_model
+
+env = make_train_env("features", n_envs=8, seed=0, random_phase=False)   # random_phase=True sortea x0 en cada episodio
+model = build_model("ppo", env, seed=0)                                  # "ppo" | "dqn"
+model.learn(total_timesteps=300_000)
+model.save("modelos/ppo")
+
+rows = evaluate_policy_phases(model, "features")                         # 10 fases x0 en [2.0, 2.95]
+print(summarize({"PPO": [rows]}))                                        # una lista de filas por seed
+
+model = load_model("ppo", "modelos/ppo.zip")                             # recargar un modelo guardado
+```
+Cada fila de `evaluate_policy_phases` tiene: `x0, success, progress, return, ticks, status, n_jumps, oracle_jumps, death_x`.
 
 ## Decisiones de diseño
 - **Un tick = un paso**; velocidad horizontal constante (0.2 tiles/tick), así el nivel dura 520 pasos.
