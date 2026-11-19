@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from agents import EVAL_PHASES, evaluate_policy_phases, summarize
+from agents import ALGOS, EVAL_PHASES, evaluate_policy_phases, summarize
 from agents.common import load_model
 from agents.evaluate import save_rows
 from train import record_agent
@@ -20,7 +20,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", help="carpeta de un run de train.py (busca <algo>/seed*/model.zip)")
     ap.add_argument("--model", help="un modelo suelto (.zip)")
-    ap.add_argument("--algo", choices=["ppo", "dqn"], help="algoritmo del --model")
+    ap.add_argument("--algo", choices=list(ALGOS), help="algoritmo del --model")
     ap.add_argument("--obs", default="features", choices=["features"])
     ap.add_argument("--n-phases", type=int, default=len(EVAL_PHASES), help="cantidad de fases x0 en [2.0, 2.95]")
     ap.add_argument("--gif", action="store_true")

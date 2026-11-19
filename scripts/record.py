@@ -14,7 +14,7 @@ from gd_env import GeometryDashEnv, OraclePolicy, record_episode
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", help="ruta a un modelo de Stable-Baselines3 (omitir = oráculo)")
-    ap.add_argument("--algo", default="PPO", help="PPO, DQN, A2C...")
+    ap.add_argument("--algo", default="PPO", help="PPO, A2C, DQN o QRDQN (mayúsculas o minúsculas)")
     ap.add_argument("--obs", default="features", choices=["grid", "features", "dict"])
     ap.add_argument("--x0", type=float, default=None)
     ap.add_argument("--out", default="videos/episodio")
@@ -23,8 +23,8 @@ def main():
 
     env = GeometryDashEnv(obs_mode=a.obs)
     if a.model:
-        import stable_baselines3 as sb3
-        policy = getattr(sb3, a.algo).load(a.model)
+        from agents.common import load_model
+        policy = load_model(a.algo, a.model)
     else:
         policy = OraclePolicy(env)
     out = record_episode(env, policy, f"{a.out}.gif", f"{a.out}_recorrido.png",

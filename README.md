@@ -1,4 +1,4 @@
-# Geometry Dash RL: entorno Gymnasium + oráculo + agentes PPO/DQN (nivel fijo)
+# Geometry Dash RL: entorno Gymnasium + oráculo + agentes PPO/A2C/DQN/QR-DQN (nivel fijo)
 
 ## Estructura
 - `gd_env/physics.py`: dinámica determinista pura (cubo, gravedad, salto, colisiones). La usan el entorno **y** el oráculo.
@@ -41,6 +41,8 @@ Instalación: `pip install -r requirements.txt` (instala Stable-Baselines3 y PyT
 ```bash
 # PPO y DQN, 3 seeds cada uno (observación `features` + MlpPolicy, recompensa por defecto)
 python scripts/train.py --algos ppo dqn --seeds 0 1 2 --timesteps 300000
+# E1: comparación de algoritmos (PPO, A2C, DQN, QR-DQN), 3 seeds cada uno
+python scripts/train.py --algos ppo a2c dqn qrdqn --seeds 0 1 2 --timesteps 300000 --run-name e1_algoritmos
 # prueba rápida (~30 s) para chequear que todo corre
 python scripts/train.py --algos ppo dqn --seeds 0 --timesteps 12000 --run-name humo
 # entrenar con fase de arranque aleatoria en vez de nivel fijo
@@ -57,7 +59,9 @@ Cada agente deja en `runs/<run-name>/<algo>/seed<N>/`: `model.zip`, `monitor/` (
 - **Evaluación**: 10 fases de arranque `x0 ∈ [2.0, 2.95]` (todas con solución comprobada por el oráculo), una política determinista por fase.
   Se reportan éxito, progreso, retorno, saltos usados vs. los del oráculo, y dónde murió.
 - **Entrenamiento `--train-phase`**: `fixed` entrena siempre con x0=2.0 (mide cuánto generaliza a otras fases); `random` sortea x0 en cada episodio.
-- **Hiperparámetros** (`agents/common.py`): PPO `n_steps=256` × 8 entornos, red [64, 64], `ent_coef=0.01`; DQN `lr=1e-3`, buffer 100k, ε 1→0.05 en el 30% del entrenamiento. Son un punto de partida, no están tuneados.
+- **Algoritmos** (`--algos`): `ppo`, `a2c`, `dqn`, `qrdqn`. PPO/A2C (on-policy) usan `--n-envs` entornos en paralelo; DQN/QR-DQN (off-policy, replay buffer) usan 1. QR-DQN viene de `sb3-contrib` (ya está en `requirements.txt`).
+- **Penalización de saltos**: `--jump-penalty 0.02` resta esa recompensa en cada salto efectivo (ver `jump_penalty` en `GeometryDashEnv`); el run queda con sufijo `_jp0.02`.
+- **Hiperparámetros** (`agents/common.py`): PPO `n_steps=256` × 8 entornos, red [64, 64], `ent_coef=0.01`; A2C `lr=7e-4`, `n_steps=16` × 8 entornos, `ent_coef=0.01`; DQN `lr=1e-3`, buffer 100k, ε 1→0.05 en el 30% del entrenamiento; QR-DQN igual que DQN con 50 cuantiles. Son un punto de partida, no están tuneados.
 - Sólo `obs_mode="features"` con `MlpPolicy` por ahora; `grid`/`dict` necesitan el extractor CNN propio (ver nota para SB3 más abajo).
 - La recompensa se cambia pasando `reward_fn` en `make_train_env(..., reward_fn=...)` (`agents/common.py`) y en `evaluate_policy_phases(..., reward_fn=...)`.
 

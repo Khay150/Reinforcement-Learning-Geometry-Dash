@@ -37,7 +37,7 @@ Si el entorno quedó activo, el prompt muestra `(.venv)` al principio.
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
-Instala `gymnasium`, `numpy`, `pillow`, `pytest`, `stable-baselines3` y `torch`.
+Instala `gymnasium`, `numpy`, `pillow`, `pytest`, `stable-baselines3`, `sb3-contrib` (para QR-DQN) y `torch`.
 PyTorch pesa bastante (varios cientos de MB), puede tardar unos minutos. Alcanza con CPU; no hace falta GPU.
 
 ## 4. Chequear que todo funciona
@@ -53,7 +53,7 @@ python scripts/run_oracle.py --ascii
 ## 5. Prueba rápida de entrenamiento (~30 s)
 
 ```bash
-python scripts/train.py --algos ppo dqn --seeds 0 --timesteps 12000 --run-name humo
+python scripts/train.py --algos ppo a2c dqn qrdqn --seeds 0 --timesteps 12000 --run-name humo --no-gif
 ```
 Si termina e imprime una tabla resumen, está todo bien. Deja resultados en `runs/humo/`.
 
@@ -63,10 +63,17 @@ Si termina e imprime una tabla resumen, está todo bien. Deja resultados en `run
 # PPO y DQN, 3 seeds cada uno (observación "features", nivel fijo)
 python scripts/train.py --algos ppo dqn --seeds 0 1 2 --timesteps 300000
 
+# E1: comparación de algoritmos (PPO, A2C, DQN y QR-DQN), 3 seeds cada uno = 12 corridas
+python scripts/train.py --algos ppo a2c dqn qrdqn --seeds 0 1 2 --timesteps 300000 --run-name e1_algoritmos
+
+# con penalización por salto efectivo (el run queda con sufijo _jp0.05)
+python scripts/train.py --algos ppo --seeds 0 1 2 --jump-penalty 0.05
+
 # con fase de arranque aleatoria en cada episodio (mide generalización)
 python scripts/train.py --algos ppo dqn --train-phase random --run-name features_random
 ```
-Opciones útiles: `--algos ppo` (solo uno), `--seeds 0` (una seed), `--n-envs 8` (entornos en paralelo, solo PPO),
+Opciones útiles: `--algos ppo` (solo uno; valores posibles: `ppo`, `a2c`, `dqn`, `qrdqn`), `--seeds 0` (una seed),
+`--n-envs 8` (entornos en paralelo, solo PPO y A2C), `--jump-penalty 0.05` (penaliza cada salto efectivo),
 `--no-gif` (no graba GIFs), `--out runs` (carpeta de salida).
 
 Por cada agente se guarda en `runs/<run-name>/<algo>/seed<N>/`:
@@ -79,7 +86,7 @@ La tabla comparativa entre seeds queda en `runs/<run-name>/resumen.md`.
 # todos los modelos de una corrida, con 20 fases y regrabando los GIFs
 python scripts/evaluate.py --run runs/features_fixed --n-phases 20 --gif
 
-# un modelo suelto
+# un modelo suelto (--algo: ppo, a2c, dqn o qrdqn)
 python scripts/evaluate.py --model runs/features_fixed/ppo/seed0/model.zip --algo ppo
 ```
 
@@ -92,6 +99,7 @@ python scripts/record.py --out videos/oraculo
 # de un modelo entrenado
 python scripts/record.py --model runs/features_fixed/ppo/seed0/model.zip --algo PPO --obs features --out videos/ppo
 ```
+`--algo` acepta PPO, A2C, DQN y QRDQN.
 Genera `<out>.gif` y `<out>_recorrido.png`. Con `--x0 2.5` se cambia la fase de arranque (entre 2.0 y 2.95).
 
 ## Problemas comunes
@@ -103,6 +111,7 @@ Genera `<out>.gif` y `<out>_recorrido.png`. Con `--x0 2.5` se cambia la fase de 
 | `python` no se encuentra | En Linux/macOS usar `python3`; en Windows probar `py -3`. |
 | `No module named 'torch'` tras instalar | Reintentar `pip install torch`; chequear que sea Python 3.10+ de 64 bits. |
 | Entrenamiento muy lento | Bajar `--timesteps` o usar `--seeds 0` / `--algos ppo`. |
+| `QR-DQN requiere sb3-contrib` | `pip install sb3-contrib` (o repetir el paso 3 con `requirements.txt` actualizado). |
 | Usar Colab | `!git clone <url>`, `%cd Reinforcement-Learning-Geometry-Dash`, `!pip install -r requirements.txt` y luego los mismos comandos con `!`. |
 
 Más detalle del diseño del entorno, el oráculo y los hiperparámetros en el [README](README.md).
