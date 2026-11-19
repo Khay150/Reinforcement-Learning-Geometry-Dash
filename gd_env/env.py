@@ -31,6 +31,10 @@ class GeometryDashEnv(gym.Env):
     Recompensa por defecto: progreso (suma 1 en todo el nivel) + win_bonus al
     terminar - death_penalty al morir + survive_bonus por tick. Se puede
     reemplazar entera con ``reward_fn(prev, new, status, level)``.
+
+    ``jump_penalty``: se resta en cada salto *efectivo* (acción 1 con el cubo
+    apoyado; apretar 1 en el aire no cuesta nada). Se aplica también si hay
+    ``reward_fn``, sumado a lo que esta devuelva.
     """
 
     metadata = {"render_modes": ["ansi", "rgb_array"], "render_fps": 60}
@@ -46,6 +50,7 @@ class GeometryDashEnv(gym.Env):
         win_bonus: float = 1.0,
         death_penalty: float = 1.0,
         survive_bonus: float = 0.0,
+        jump_penalty: float = 0.0,
         reward_fn: RewardFn | None = None,
         max_steps: int | None = None,
         render_mode: str | None = None,
@@ -56,6 +61,7 @@ class GeometryDashEnv(gym.Env):
         self.obs_mode, self.window, self.lookahead = obs_mode, window, lookahead
         self.progress_scale, self.win_bonus = progress_scale, win_bonus
         self.death_penalty, self.survive_bonus = death_penalty, survive_bonus
+        self.jump_penalty = jump_penalty
         self.reward_fn = reward_fn
         self.render_mode = render_mode
 
@@ -93,12 +99,15 @@ class GeometryDashEnv(gym.Env):
         if self._done:      # estado terminal absorbente: el cubo muerto/ganador no se mueve más
             return self._obs(), 0.0, self.status in DEAD or self.status == WIN, False, self._info()
         prev = self.state
-        if int(action) == 1 and prev.on_ground:
+        jumped = int(action) == 1 and prev.on_ground
+        if jumped:
             self._jumps.append((prev.x, prev.y))
         self.state, self.status = ph.step(self.level, self.p, prev, int(action))
         self._trail.append((self.state.x, self.state.y))
 
         reward = self._reward(prev, self.state, self.status)
+        if jumped:
+            reward -= self.jump_penalty
         terminated = self.status in DEAD or self.status == WIN
         self._done = terminated
         truncated = (not terminated) and self.state.t >= self.max_steps

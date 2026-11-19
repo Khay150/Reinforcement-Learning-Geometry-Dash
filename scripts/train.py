@@ -48,9 +48,11 @@ def main():
     ap.add_argument("--run-name", default=None)
     ap.add_argument("--out", default="runs")
     ap.add_argument("--no-gif", action="store_true")
+    ap.add_argument("--jump-penalty", type=float, default=0.0,
+                    help="recompensa restada en cada salto efectivo (p. ej. 0.02); 0 = sin penalización")
     a = ap.parse_args()
 
-    run_name = a.run_name or f"{a.obs}_{a.train_phase}"
+    run_name = a.run_name or f"{a.obs}_{a.train_phase}" + (f"_jp{a.jump_penalty:g}" if a.jump_penalty else "")
     root = Path(a.out) / run_name
     results: dict[str, list[list[dict]]] = {}
 
@@ -59,19 +61,22 @@ def main():
             d = root / algo / f"seed{seed}"
             d.mkdir(parents=True, exist_ok=True)
             env = make_train_env(a.obs, n_envs=a.n_envs if algo == "ppo" else 1, seed=seed,
-                                 random_phase=a.train_phase == "random", monitor_dir=str(d / "monitor"))
+                                 random_phase=a.train_phase == "random", monitor_dir=str(d / "monitor"),
+                                 jump_penalty=a.jump_penalty)
             model = build_model(algo, env, seed, a.obs)
             t0 = time.time()
             model.learn(total_timesteps=a.timesteps)
             model.save(d / "model")
-            rows = evaluate_policy_phases(model, a.obs)
+            rows = evaluate_policy_phases(model, a.obs, jump_penalty=a.jump_penalty)
             save_rows(rows, d / "eval_fases.csv")
             if not a.no_gif:
                 record_agent(model, a.obs, d, rows)
             ok = sum(r["success"] for r in rows)
             print(f"[{algo} seed{seed}] {time.time()-t0:5.0f}s  gana {ok}/{len(rows)} fases  "
-                  f"progreso medio {100*sum(r['progress'] for r in rows)/len(rows):.0f}%", flush=True)
-            results.setdefault(f"{algo.upper()} ({a.obs}, train={a.train_phase})", []).append(rows)
+                  f"progreso medio {100*sum(r['progress'] for r in rows)/len(rows):.0f}%  "
+                  f"saltos {sum(r['n_jumps'] for r in rows)/len(rows):.1f} (oráculo {rows[0]['oracle_jumps']})", flush=True)
+            jp = f", jp={a.jump_penalty:g}" if a.jump_penalty else ""
+            results.setdefault(f"{algo.upper()} ({a.obs}, train={a.train_phase}{jp})", []).append(rows)
             env.close()
 
     table = summarize(results)

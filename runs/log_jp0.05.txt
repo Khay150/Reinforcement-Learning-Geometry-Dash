@@ -1,0 +1,4 @@
+
+| agente | seeds | éxito (% fases) | progreso medio | retorno medio | saltos / oráculo (fases ganadas) | seeds que ganan en todas las fases |
+|---|---|---|---|---|---|---|
+| PPO (features, train=fixed, jp=0.05) | 1 | 100 ± 0 | 100% ± 0 | 1.05 ± 0.00 | 1.46 | 1/1 |

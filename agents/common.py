@@ -27,11 +27,11 @@ class RandomPhase(gym.Wrapper):
 
 
 def make_train_env(obs_mode: str, n_envs: int, seed: int, random_phase: bool, monitor_dir: str | None = None,
-                   reward_fn=None):
+                   reward_fn=None, jump_penalty: float = 0.0):
     """VecEnv de entrenamiento. ``random_phase=False`` entrena siempre con x0 = 2.0 (nivel fijo)."""
     return make_vec_env(
         GeometryDashEnv, n_envs=n_envs, seed=seed, monitor_dir=monitor_dir,
-        env_kwargs={"obs_mode": obs_mode, "reward_fn": reward_fn},
+        env_kwargs={"obs_mode": obs_mode, "reward_fn": reward_fn, "jump_penalty": jump_penalty},
         wrapper_class=RandomPhase if random_phase else None,
         monitor_kwargs={"info_keywords": ("success", "progress")},
     )

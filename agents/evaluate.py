@@ -11,9 +11,10 @@ from gd_env import GeometryDashEnv, Oracle
 from .common import EVAL_PHASES
 
 
-def evaluate_policy_phases(policy, obs_mode: str = "features", phases=EVAL_PHASES, reward_fn=None) -> list[dict]:
+def evaluate_policy_phases(policy, obs_mode: str = "features", phases=EVAL_PHASES, reward_fn=None,
+                           jump_penalty: float = 0.0) -> list[dict]:
     """Corre un episodio determinista por cada x0. ``policy`` = cualquier objeto con ``.predict``."""
-    env = GeometryDashEnv(obs_mode=obs_mode, reward_fn=reward_fn)
+    env = GeometryDashEnv(obs_mode=obs_mode, reward_fn=reward_fn, jump_penalty=jump_penalty)
     oracle = Oracle(env.level, env.p)
     rows = []
     for x0 in phases:
@@ -42,14 +43,17 @@ def save_rows(rows: list[dict], path: str | Path):
 
 def summarize(results: dict[str, list[list[dict]]]) -> str:
     """results[nombre_agente] = lista (una por seed) de filas por fase. Devuelve una tabla markdown."""
-    lines = ["| agente | seeds | éxito (% fases) | progreso medio | retorno medio | seeds que ganan en todas las fases |",
-             "|---|---|---|---|---|---|"]
+    lines = ["| agente | seeds | éxito (% fases) | progreso medio | retorno medio | saltos / oráculo (fases ganadas) "
+             "| seeds que ganan en todas las fases |",
+             "|---|---|---|---|---|---|---|"]
     for name, per_seed in results.items():
         succ = [np.mean([r["success"] for r in rows]) for rows in per_seed]
         prog = [np.mean([r["progress"] for r in rows]) for rows in per_seed]
         ret = [np.mean([r["return"] for r in rows]) for rows in per_seed]
+        won = [r for rows in per_seed for r in rows if r["success"]]
+        ratio = f"{np.mean([r['n_jumps'] / r['oracle_jumps'] for r in won]):.2f}" if won else "-"
         full = sum(s == 1.0 for s in succ)
         lines.append(f"| {name} | {len(per_seed)} | {100*np.mean(succ):.0f} ± {100*np.std(succ):.0f} | "
                      f"{100*np.mean(prog):.0f}% ± {100*np.std(prog):.0f} | {np.mean(ret):.2f} ± {np.std(ret):.2f} | "
-                     f"{full}/{len(per_seed)} |")
+                     f"{ratio} | {full}/{len(per_seed)} |")
     return "\n".join(lines)

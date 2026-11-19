@@ -168,3 +168,21 @@ def test_side_crash_stops_at_block_face():
         _, _, done, _, info = env.step(0)
     assert info["status"] == ph.CRASH
     assert env.state.x + 1.0 <= 5.0 + 1e-6            # borde derecho del cubo <= cara izquierda del bloque (x=5)
+
+
+def test_jump_penalty_only_on_effective_jumps():
+    """Sólo cuesta el salto efectivo (apoyado); mantener 1 en el aire no suma penalización."""
+    c = 0.05
+    for policy in (lambda o, e: 1, lambda o, e: int(e.state.t % 3 == 0)):
+        base, pen = GeometryDashEnv(obs_mode="features"), GeometryDashEnv(obs_mode="features", jump_penalty=c)
+        _, r0 = run(base, policy)
+        _, r1 = run(pen, policy)
+        assert len(pen._jumps) > 0
+        assert r1 == pytest.approx(r0 - c * len(pen._jumps))
+
+
+def test_oracle_return_with_jump_penalty():
+    env = GeometryDashEnv(obs_mode="features", jump_penalty=0.02)
+    pol = OraclePolicy(env)
+    info, ret = run(env, lambda o, e: pol.predict(o)[0])
+    assert info["success"] and ret == pytest.approx(2.0 - 0.02 * 13)
