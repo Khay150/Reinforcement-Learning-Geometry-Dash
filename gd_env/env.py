@@ -48,7 +48,7 @@ class GeometryDashEnv(gym.Env):
         lookahead: int = 12,
         progress_scale: float = 1.0,
         win_bonus: float = 1.0,
-        death_penalty: float = 1.0,
+        death_penalty: float = 10.0,
         survive_bonus: float = 0.0,
         jump_penalty: float = 0.0,
         reward_fn: RewardFn | None = None,
@@ -65,14 +65,16 @@ class GeometryDashEnv(gym.Env):
         self.reward_fn = reward_fn
         self.render_mode = render_mode
 
-        ticks_needed = int(np.ceil((self.level.goal_x - self.level.start_x) / self.p.vx))
+        ticks_needed = int(
+            np.ceil((self.level.goal_x - self.level.start_x) / self.p.vx))
         self.max_steps = max_steps or int(ticks_needed * 1.5)
 
         H = self.level.height
         self.action_space = spaces.Discrete(2)
         grid_space = spaces.Box(0, 1, (3, H, window), dtype=np.uint8)
         vec_space = spaces.Box(-2.0, 2.0, (4,), dtype=np.float32)
-        feat_space = spaces.Box(-2.0, 2.0, (4 + 2 * lookahead,), dtype=np.float32)
+        feat_space = spaces.Box(-2.0, 2.0,
+                                (4 + 2 * lookahead,), dtype=np.float32)
         self.observation_space = {
             "grid": grid_space, "features": feat_space,
             "dict": spaces.Dict({"grid": grid_space, "vec": vec_space}),
@@ -82,12 +84,15 @@ class GeometryDashEnv(gym.Env):
         self.status = ph.OK
         self._done = False
         self._trail: list[tuple[float, float]] = []
-        self._jumps: list[tuple[float, float]] = []      # (x, y) de cada despegue
+        # (x, y) de cada despegue
+        self._jumps: list[tuple[float, float]] = []
 
     # ------------------------------------------------------------------ API
     def reset(self, *, seed: int | None = None, options: dict | None = None):
-        super().reset(seed=seed)               # el entorno es determinista; seed sólo por API
-        x0 = (options or {}).get("x0")         # permite variaciones de la fase de arranque
+        # el entorno es determinista; seed sólo por API
+        super().reset(seed=seed)
+        # permite variaciones de la fase de arranque
+        x0 = (options or {}).get("x0")
         self.state = ph.initial_state(self.level, self.p, x0)
         self.status = ph.OK
         self._done = False
@@ -102,7 +107,8 @@ class GeometryDashEnv(gym.Env):
         jumped = int(action) == 1 and prev.on_ground
         if jumped:
             self._jumps.append((prev.x, prev.y))
-        self.state, self.status = ph.step(self.level, self.p, prev, int(action))
+        self.state, self.status = ph.step(
+            self.level, self.p, prev, int(action))
         self._trail.append((self.state.x, self.state.y))
 
         reward = self._reward(prev, self.state, self.status)

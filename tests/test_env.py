@@ -186,3 +186,101 @@ def test_oracle_return_with_jump_penalty():
     pol = OraclePolicy(env)
     info, ret = run(env, lambda o, e: pol.predict(o)[0])
     assert info["success"] and ret == pytest.approx(2.0 - 0.02 * 13)
+
+
+def ppo_on_vec_env(random_phase=False):
+    """PPO sin entrenar sobre 2 entornos (para probar callbacks)."""
+    from agents import build_model, make_train_env
+    venv = make_train_env("features", n_envs=2, seed=0, random_phase=random_phase)
+    return venv, build_model("ppo", venv, seed=0)
+
+
+def test_jump_penalty_schedule_values():
+    from agents.callbacks import jump_penalty_at
+    assert jump_penalty_at(0.0, 0.1, 0.3, 0.6) == 0.0
+    assert jump_penalty_at(0.3, 0.1, 0.3, 0.6) == 0.0
+    assert jump_penalty_at(0.45, 0.1, 0.3, 0.6) == pytest.approx(0.05)
+    assert jump_penalty_at(0.6, 0.1, 0.3, 0.6) == pytest.approx(0.1)
+    assert jump_penalty_at(1.0, 0.1, 0.3, 0.6) == pytest.approx(0.1)
+
+
+def test_jump_penalty_schedule_reaches_inner_env():
+    """El callback tiene que cambiar el entorno de adentro (debajo de Monitor/RandomPhase), no el wrapper."""
+    from agents.callbacks import JumpPenaltySchedule
+    venv, model = ppo_on_vec_env(random_phase=True)
+    cb = JumpPenaltySchedule(c_max=0.1, total_timesteps=1000, start=0.0, end=0.5)
+    model.learn(total_timesteps=1000, callback=cb)
+    assert [e.unwrapped.jump_penalty for e in venv.envs] == [pytest.approx(0.1)] * 2
+    assert cb.c == pytest.approx(0.1)
+
+
+def test_performance_ramp_logic():
+    """Sube c cuando gana >= up en la ventana, baja con <= down, no se mueve en el medio; topes 0 y c_max."""
+    from agents.callbacks import PerformanceJumpPenaltyRamp
+    r = PerformanceJumpPenaltyRamp(c_max=0.02, step=0.01, window=4, up=0.75, down=0.25)
+    assert not any(r.observe(False) for _ in range(4)) and r.c == 0.0        # pierde siempre: no baja de 0
+    # ventana móvil [F,F,F,F] -> ... -> [F,T,T,T]: al tercer éxito llega a 0.75 >= up
+    assert [r.observe(True) for _ in range(3)] == [False, False, True] and r.c == 0.01
+    assert len(r.results) == 0                                                  # ventana vacía tras el cambio
+    for s in (True, False, True, False):                                        # 50%: zona neutra
+        assert not r.observe(s)
+    assert r.c == 0.01
+    for _ in range(8):
+        r.observe(True)
+    assert r.c == 0.02                                                          # tope c_max
+    for _ in range(4):
+        r.observe(True)
+    assert r.c == 0.02
+    for _ in range(4):
+        r.observe(False)
+    assert r.c == pytest.approx(0.01)                                           # se afloja si muere mucho
+
+
+def test_performance_ramp_reads_monitor_episodes():
+    """Integrado con SB3: lee el éxito de los episodios desde Monitor y aplica c al entorno de adentro."""
+    from agents.callbacks import PerformanceJumpPenaltyRamp
+    venv, model = ppo_on_vec_env()
+    ramp = PerformanceJumpPenaltyRamp(c_max=0.05, step=0.01, window=2, up=1.0, down=0.0)
+    model.learn(total_timesteps=2048, callback=ramp)     # sin entrenar, muere siempre -> éxito 0 <= down
+    assert ramp.last_rate == 0.0 and ramp.c == 0.0
+    assert [e.unwrapped.jump_penalty for e in venv.envs] == [0.0, 0.0]
+
+
+def test_best_model_callback(tmp_path):
+    import json
+    from agents.callbacks import BestModelCallback
+    _, model = ppo_on_vec_env()
+    cb = BestModelCallback(eval_freq=512, save_dir=tmp_path, phases=[2.0, 2.5])
+    model.learn(total_timesteps=1024, callback=cb)
+    assert (tmp_path / "best_model.zip").exists()
+    info = json.loads((tmp_path / "best_model.json").read_text())
+    assert {"timesteps", "success", "progress", "mean_jumps_won"} <= info.keys()
+    hist = (tmp_path / "eval_history.csv").read_text().strip().splitlines()
+    assert len(hist) >= 3                                    # encabezado + >= 2 evaluaciones (incluye la final)
+
+
+def test_score_prefers_success_then_fewer_jumps():
+    from agents.callbacks import _score
+    from agents.evaluate import metrics
+    row = lambda s, j: {"success": s, "progress": 1.0 if s else 0.5, "n_jumps": j}
+    assert _score(metrics([row(1, 27)])) > _score(metrics([row(0, 13)]))        # ganar pesa más que saltar poco
+    assert _score(metrics([row(1, 13)])) > _score(metrics([row(1, 27)]))        # a igual éxito, menos saltos
+
+
+@pytest.mark.parametrize("algo", ["ppo", "dqn"])
+def test_continue_training_from_saved_model(tmp_path, algo):
+    import torch
+    from agents import build_model, make_train_env
+    from agents.common import load_for_training
+    n_envs = 2 if algo == "ppo" else 1
+    model = build_model(algo, make_train_env("features", n_envs=n_envs, seed=0, random_phase=False), seed=0)
+    model.save(tmp_path / "m")
+    params = {k: v.clone() for k, v in model.policy.state_dict().items()}
+    # PPO: otra cantidad de entornos que el original
+    env2 = make_train_env("features", n_envs=3 if algo == "ppo" else 1, seed=1, random_phase=False)
+    cont = load_for_training(algo, str(tmp_path / "m.zip"), env2, seed=1)
+    assert all(torch.equal(params[k], v) for k, v in cont.policy.state_dict().items())   # mismos pesos
+    if algo == "dqn":
+        assert cont.exploration_schedule(1.0) == pytest.approx(cont.exploration_final_eps)  # no vuelve a ε=1
+    cont.learn(total_timesteps=600)
+    assert cont.num_timesteps >= 600
