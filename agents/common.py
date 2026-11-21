@@ -30,11 +30,12 @@ class RandomPhase(gym.Wrapper):
 
 
 def make_train_env(obs_mode: str, n_envs: int, seed: int, random_phase: bool, monitor_dir: str | None = None,
-                   reward_fn=None, jump_penalty: float = 0.0):
-    """VecEnv de entrenamiento. ``random_phase=False`` entrena siempre con x0 = 2.0 (nivel fijo)."""
+                   **env_kwargs):
+    """VecEnv de entrenamiento. ``random_phase=False`` entrena siempre con x0 = 2.0 (nivel fijo).
+    ``env_kwargs`` va directo a ``GeometryDashEnv`` (p. ej. ``jump_penalty``, ``death_penalty``, ``reward_fn``)."""
     return make_vec_env(
         GeometryDashEnv, n_envs=n_envs, seed=seed, monitor_dir=monitor_dir,
-        env_kwargs={"obs_mode": obs_mode, "reward_fn": reward_fn, "jump_penalty": jump_penalty},
+        env_kwargs={"obs_mode": obs_mode, **env_kwargs},
         wrapper_class=RandomPhase if random_phase else None,
         monitor_kwargs={"info_keywords": ("success", "progress")},
     )
@@ -83,7 +84,25 @@ def build_model(algo: str, env, seed: int, obs_mode: str = "features", tensorboa
     raise ValueError(f"algoritmo desconocido: {algo} (usar {', '.join(ALGOS)})")
 
 
-def load_model(algo: str, path: str):
+def load_model(algo: str, path: str, env=None):
+    """Carga un modelo guardado (``env`` sólo hace falta para seguir entrenándolo)."""
     algo = algo.lower()
     cls = _qrdqn_cls() if algo == "qrdqn" else {"ppo": PPO, "a2c": A2C, "dqn": DQN}[algo]
-    return cls.load(path, device="cpu")
+    return cls.load(path, env=env, device="cpu")
+
+
+def load_for_training(algo: str, path: str, env, seed: int):
+    """Carga un modelo para **seguir entrenándolo** sobre ``env`` (p. ej. para hacer fine-tuning con otra recompensa).
+
+    * Se conservan los pesos y los hiperparámetros guardados en el ``.zip`` (no los de ``build_model``).
+    * ``env`` puede tener otra cantidad de entornos en paralelo que el original.
+    * DQN / QR-DQN: el replay buffer no se guarda en el ``.zip``, así que arranca vacío (vuelven a correr los
+      ``learning_starts`` pasos sin entrenar). La exploración ε arranca directamente en su valor final (0.05):
+      si volviera a 1.0 jugaría al azar durante el 30% del entrenamiento y desaprovecharía el modelo.
+    """
+    model = load_model(algo, path, env=env)
+    model.set_random_seed(seed)
+    if algo.lower() not in ON_POLICY:
+        eps = model.exploration_final_eps
+        model.exploration_schedule = lambda _progress: eps     # ε constante en vez de volver a 1.0
+    return model

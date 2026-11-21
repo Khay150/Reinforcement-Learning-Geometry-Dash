@@ -48,7 +48,7 @@ class GeometryDashEnv(gym.Env):
         lookahead: int = 12,
         progress_scale: float = 1.0,
         win_bonus: float = 1.0,
-        death_penalty: float = 1.0,
+        death_penalty: float = 10.0,
         survive_bonus: float = 0.0,
         jump_penalty: float = 0.0,
         reward_fn: RewardFn | None = None,
