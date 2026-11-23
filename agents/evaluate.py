@@ -1,4 +1,4 @@
-"""Evaluación de una política en varias fases de arranque (x0) + resumen entre seeds."""
+"""Evaluación de una política en varios niveles y fases de arranque (x0) + resumen entre seeds."""
 from __future__ import annotations
 
 import csv
@@ -7,38 +7,38 @@ from pathlib import Path
 
 import numpy as np
 
-from gd_env import GeometryDashEnv, Oracle
+from gd_env import GeometryDashEnv, Level, Oracle, Physics
 from gd_env import physics as ph
 
 from .common import EVAL_PHASES
 
 
-@lru_cache(maxsize=None)      # cache: el resultado sólo depende de x0, así que cada fase se planifica una sola vez
-def oracle_jumps(x0: float) -> int:
-    """Saltos mínimos del oráculo en el nivel por defecto arrancando en ``x0``.
-    Se calcula una sola vez por fase (planificar tarda ~0.15 s y se evalúa muchas veces)."""
-    env = GeometryDashEnv()
-    plan = Oracle(env.level, env.p).plan(ph.initial_state(env.level, env.p, x0))
+@lru_cache(maxsize=None)      # cache: cada (nivel, fase) se planifica una sola vez (tarda ~0.15 s y se evalúa muchas veces)
+def oracle_jumps(level: Level, x0: float) -> int:
+    """Saltos mínimos del oráculo en ``level`` arrancando en ``x0`` (-1 si no tiene solución)."""
+    p = Physics()
+    plan = Oracle(level, p).plan(ph.initial_state(level, p, x0))
     return plan.n_jumps if plan else -1
 
 
 def evaluate_policy_phases(policy, obs_mode: str = "features", phases=EVAL_PHASES, **env_kwargs) -> list[dict]:
-    """Corre un episodio determinista por cada x0. ``policy`` = cualquier objeto con ``.predict``.
-    ``env_kwargs`` va directo a ``GeometryDashEnv`` (p. ej. ``jump_penalty``, ``death_penalty``, ``reward_fn``)."""
+    """Corre un episodio determinista por cada nivel y cada x0. ``policy`` = cualquier objeto con ``.predict``.
+    ``env_kwargs`` va directo a ``GeometryDashEnv`` (p. ej. ``level``, ``jump_penalty``, ``death_penalty``,
+    ``reward_fn``): se evalúan **todos** los niveles de ``level`` (los pesos no importan acá)."""
     # ``obs_mode`` tiene que ser el mismo con el que se entrenó el modelo (features / grid / dict).
     env = GeometryDashEnv(obs_mode=obs_mode, **env_kwargs)
     rows = []
-    for x0 in phases:                                     # un episodio completo por cada fase de arranque
-        obs, info = env.reset(seed=0, options={"x0": float(x0)})
+    for level, x0 in [(lv, x0) for lv in env.levels for x0 in phases]:     # un episodio por (nivel, fase)
+        obs, info = env.reset(seed=0, options={"x0": float(x0), "level": level.name})
         done, ret = False, 0.0
         while not done:
             a, _ = policy.predict(obs, deterministic=True)    # determinista: siempre la mejor acción, sin exploración
             obs, r, term, trunc, info = env.step(int(np.asarray(a).reshape(-1)[0]))
             ret += r
             done = term or trunc
-        rows.append({"x0": round(float(x0), 3), "success": int(info["success"]), "progress": round(info["progress"], 4),
+        rows.append({"level": level.name, "x0": round(float(x0), 3), "success": int(info["success"]), "progress": round(info["progress"], 4),
                      "return": round(ret, 4), "ticks": info["t"], "status": info["status"],
-                     "n_jumps": len(env._jumps), "oracle_jumps": oracle_jumps(float(x0)),
+                     "n_jumps": len(env._jumps), "oracle_jumps": oracle_jumps(level, float(x0)),
                      "death_x": round(info["x"], 2) if not info["success"] else ""})
     return rows
 
@@ -53,11 +53,17 @@ def metrics(rows: list[dict]) -> dict:
 
 
 def describe(rows: list[dict]) -> str:
-    """Una línea legible con el resultado de una evaluación."""
+    """Una línea legible con el resultado de una evaluación (con varios niveles, agrega las fases ganadas por nivel)."""
     m = metrics(rows)
     jumps = f"{m['mean_jumps_won']:.1f}" if m["mean_jumps_won"] is not None else "-"
-    return (f"gana {sum(r['success'] for r in rows)}/{len(rows)} fases  progreso {100 * m['progress']:.0f}%  "
-            f"saltos {jumps} (oráculo {rows[0]['oracle_jumps']})")
+    oracle = np.mean([r["oracle_jumps"] for r in rows])
+    text = (f"gana {sum(r['success'] for r in rows)}/{len(rows)} fases  progreso {100 * m['progress']:.0f}%  "
+            f"saltos {jumps} (oráculo {oracle:.3g})")
+    levels = list(dict.fromkeys(r["level"] for r in rows))
+    if len(levels) > 1:
+        text += "  [" + ", ".join(f"{lv} {sum(r['success'] for r in rows if r['level'] == lv)}/"
+                                  f"{sum(r['level'] == lv for r in rows)}" for lv in levels) + "]"
+    return text
 
 
 def save_rows(rows: list[dict], path: str | Path):

@@ -1,4 +1,4 @@
-"""Entorno Gymnasium de un Geometry Dash minimalista (modo cubo) sobre un nivel fijo."""
+"""Entorno Gymnasium de un Geometry Dash minimalista (modo cubo) sobre uno o varios niveles fijos."""
 from __future__ import annotations
 
 import gymnasium as gym
@@ -33,13 +33,19 @@ class GeometryDashEnv(gym.Env):
     ``jump_penalty``: se resta en cada salto *efectivo* (acción 1 con el cubo
     apoyado; apretar 1 en el aire no cuesta nada). Se aplica también si hay
     ``reward_fn``, sumado a lo que esta devuelva.
+
+    Varios niveles: ``level`` puede ser una lista. En cada ``reset`` se sortea uno con probabilidad proporcional a
+    ``level_weights`` (por defecto, todos iguales; un peso 0 deja el nivel cargado pero sin jugarse). Los pesos se
+    pueden cambiar en medio del entrenamiento (p. ej. con ``set_wrapper_attr`` desde un callback).
+    ``reset(options={"level": "level_2"})`` fuerza un nivel (por nombre o índice); ``info["level"]`` dice cuál se juega.
     """
 
     metadata = {"render_modes": ["ansi", "rgb_array"], "render_fps": 60}
 
     def __init__(
         self,
-        level: Level | None = None,
+        level: Level | list[Level] | None = None,   # un nivel o una lista (se sortea uno por episodio)
+        level_weights: list[float] | None = None,  # peso de cada nivel de la lista (None = todos iguales)
         physics: Physics | None = None,
         obs_mode: str = "grid",          # "grid" | "features" | "dict" (ver el docstring de la clase)
         window: int = 16,                # ancho (columnas) de la ventana de la grilla
@@ -54,7 +60,11 @@ class GeometryDashEnv(gym.Env):
         render_mode: str | None = None,
     ):
         assert obs_mode in ("grid", "features", "dict")
-        self.level = level or level_1()
+        self.levels = list(level) if isinstance(level, (list, tuple)) else [level or level_1()]
+        if len({lv.height for lv in self.levels}) != 1:
+            raise ValueError("todos los niveles tienen que tener la misma altura (define la forma de la observación)")
+        self.level_weights = level_weights
+        self.level = self.levels[0]
         self.p = physics or Physics()
         self.obs_mode, self.window, self.lookahead = obs_mode, window, lookahead
         self.progress_scale, self.win_bonus = progress_scale, win_bonus
@@ -63,9 +73,8 @@ class GeometryDashEnv(gym.Env):
         self.reward_fn = reward_fn                       # property: acepta fn(tr) o fn(prev, new, status, level)
         self.render_mode = render_mode
 
-        # Ticks que dura el nivel a velocidad constante; el episodio se trunca a 1.5x para no quedar colgado.
-        ticks_needed = int(np.ceil((self.level.goal_x - self.level.start_x) / self.p.vx))
-        self.max_steps = max_steps or int(ticks_needed * 1.5)
+        self._max_steps_arg = max_steps
+        self._set_level(self.level)
 
         # Espacios de Gymnasium. Acción: 0 = nada, 1 = saltar. Observación: depende de ``obs_mode``.
         H = self.level.height
@@ -86,8 +95,10 @@ class GeometryDashEnv(gym.Env):
 
     # ------------------------------------------------------------------ API
     def reset(self, *, seed: int | None = None, options: dict | None = None):
-        super().reset(seed=seed)               # el entorno es determinista; seed sólo por API
-        x0 = (options or {}).get("x0")         # permite variaciones de la fase de arranque
+        super().reset(seed=seed)               # la física es determinista; seed sólo sortea el nivel (si hay varios)
+        options = options or {}
+        self._set_level(self._pick_level(options.get("level")))
+        x0 = options.get("x0")                 # permite variaciones de la fase de arranque
         self.state = ph.initial_state(self.level, self.p, x0)
         self.status = ph.OK
         self._done = False
@@ -115,6 +126,26 @@ class GeometryDashEnv(gym.Env):
         return self._obs(), float(reward), terminated, truncated, self._info()
 
     # ------------------------------------------------------------ internals
+    def _set_level(self, level: Level):
+        self.level = level
+        # Ticks que dura el nivel a velocidad constante; el episodio se trunca a 1.5x para no quedar colgado.
+        ticks_needed = int(np.ceil((level.goal_x - level.start_x) / self.p.vx))
+        self.max_steps = self._max_steps_arg or int(ticks_needed * 1.5)
+
+    def _pick_level(self, key: str | int | None) -> Level:
+        """El nivel pedido (por nombre o índice) o, si no se pide ninguno, uno sorteado según ``level_weights``."""
+        if key is not None:
+            if isinstance(key, str):
+                matches = [lv for lv in self.levels if lv.name == key]
+                if not matches:
+                    raise ValueError(f"el entorno no tiene el nivel {key!r}")
+                return matches[0]
+            return self.levels[key]
+        if len(self.levels) == 1:
+            return self.levels[0]
+        w = np.ones(len(self.levels)) if self.level_weights is None else np.asarray(self.level_weights, float)
+        return self.levels[self.np_random.choice(len(self.levels), p=w / w.sum())]
+
     @property
     def reward_fn(self) -> RewardFn | None:
         return self._reward_fn
@@ -136,7 +167,7 @@ class GeometryDashEnv(gym.Env):
         span = self.level.goal_x - self.level.start_x
         return {"x": s.x, "y": s.y, "t": s.t, "status": self.status,
                 "progress": float(np.clip((s.x - self.level.start_x) / span, 0, 1)),
-                "success": self.status == WIN}
+                "success": self.status == WIN, "level": self.level.name}
 
     def _vec(self) -> np.ndarray:
         """Vector de 4 números: altura y velocidad vertical normalizadas, si está apoyado, y la parte fraccionaria de x."""

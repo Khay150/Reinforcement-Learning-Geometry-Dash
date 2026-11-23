@@ -5,7 +5,7 @@
   python scripts/evaluate.py --run runs/features_fixed --best          # usa best_model.zip en vez de model.zip
   python scripts/evaluate.py --model runs/features_fixed/ppo/seed0/model.zip --algo ppo
 
-La recompensa (jump_penalty, death_penalty) y el tipo de observación (--obs: features, grid o dict) se toman del
+Los niveles (de entrenamiento y de validación), la recompensa (jump_penalty, death_penalty) y el tipo de observación (--obs: features, grid o dict) se toman del
 config.json de la corrida, para que el retorno coincida con el que calculó train.py y el modelo reciba la observación
 con la que se entrenó. Con --model suelto sin config.json hay que pasar --obs si no es "features".
 """
@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))     # raíz del rep
 from agents import ALGOS, EVAL_PHASES, summarize
 from agents.common import load_model
 from agents.evaluate import describe
-from agents.runs import evaluate_and_record, reward_kwargs, run_config
+from agents.runs import evaluate_and_record, level_kwargs, reward_kwargs, run_config
 
 
 def main():
@@ -45,15 +45,22 @@ def main():
         jobs.append((a.algo, Path(a.model)))
     assert jobs, "no se encontró ningún modelo"
 
-    results = {}                                  # algoritmo -> lista (una por modelo/seed) de filas por fase
+    results, val_results = {}, {}                # algoritmo -> lista (una por modelo/seed) de filas por fase
     for algo, path in jobs:
         cfg = run_config(path)                                       # config.json de la corrida ({} si no hay)
         obs_mode = a.obs or cfg.get("obs", "features")               # --obs manda; si no, el de la corrida
-        rows = evaluate_and_record(load_model(algo, str(path)), path, obs_mode, reward_kwargs(cfg),
-                                   gif=a.gif, phases=phases)
+        model, reward = load_model(algo, str(path)), reward_kwargs(cfg)
+        rows = evaluate_and_record(model, path, obs_mode, {**reward, **level_kwargs(cfg)}, gif=a.gif, phases=phases)
         results.setdefault(algo.upper(), []).append(rows)
         print(f"{path}: {describe(rows)}")
+        val = level_kwargs(cfg, "val")                               # niveles de validación (si la corrida tiene)
+        if val:
+            vrows = evaluate_and_record(model, path, obs_mode, {**reward, **val}, gif=a.gif, phases=phases, val=True)
+            val_results.setdefault(algo.upper(), []).append(vrows)
+            print(f"  validación: {describe(vrows)}")
     print("\n" + summarize(results))
+    if val_results:
+        print("\nValidación:\n" + summarize(val_results))
 
 
 if __name__ == "__main__":

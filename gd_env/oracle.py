@@ -137,8 +137,16 @@ class OraclePolicy:
 
     def __init__(self, env):
         self.env = env.unwrapped if hasattr(env, "unwrapped") else env
-        self.oracle = Oracle(self.env.level, self.env.p)
+        self._oracles: dict[int, Oracle] = {}          # un oráculo por nivel (el entorno puede cambiar de nivel)
 
     def predict(self, obs=None, state=None, episode_start=None, deterministic=True):
         # No usa ``obs``: mira el estado interno del entorno. Los argumentos extra existen sólo para imitar a SB3.
         return self.oracle.action(self.env.state), None
+
+    @property
+    def oracle(self) -> Oracle:
+        """Oráculo del nivel que el entorno está jugando ahora (se crea la primera vez que se lo necesita)."""
+        lv = self.env.level
+        if id(lv) not in self._oracles:
+            self._oracles[id(lv)] = Oracle(lv, self.env.p)
+        return self._oracles[id(lv)]

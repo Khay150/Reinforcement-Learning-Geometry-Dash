@@ -1,0 +1,12 @@
+{
+  "_nota": [
+    "Conjunto de niveles para --levels. Las claves que empiezan con '_' se ignoran.",
+    "niveles: {nombre: peso} (probabilidad relativa de jugar cada nivel) o una lista de nombres (todos con peso 1).",
+    "validacion: nombre o lista de nombres (held out: no se entrena en ellos), un número N (sortea N de 'niveles' y los",
+    "saca del entrenamiento; reproducible con --val-seed) o null (valida en uno de los de entrenamiento, al azar).",
+    "Ejemplo con varios niveles: {\"niveles\": {\"level_1\": 1.0, \"level_2\": 1.0, \"level_3\": 2.0}, \"validacion\": [\"level_4\", \"level_5\"]}",
+    "Los nombres tienen que estar registrados en gd_env.LEVELS (gd_env/levels.py). Hoy sólo existe level_1."
+  ],
+  "niveles": {"level_1": 1.0},
+  "validacion": null
+}
