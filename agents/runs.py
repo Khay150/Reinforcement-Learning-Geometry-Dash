@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from gd_env import GeometryDashEnv, record_episode
+from gd_env import GeometryDashEnv, load_reward_fn, record_episode
 
 from .common import EVAL_PHASES
 from .evaluate import evaluate_policy_phases, save_rows
@@ -13,11 +13,21 @@ from .evaluate import evaluate_policy_phases, save_rows
 OUTPUT_TAGS = {"model": ("", ""), "best_model": ("_best", "mejor_")}
 
 
+REWARD_PARAMS = ("jump_penalty", "death_penalty", "win_bonus", "progress_scale", "survive_bonus")
+
+
 def reward_kwargs(cfg: dict) -> dict:
-    """Parámetros de la recompensa para ``GeometryDashEnv``, a partir de los argumentos (o de un ``config.json``)."""
-    kwargs = {"jump_penalty": cfg.get("jump_penalty", 0.0)}
-    if cfg.get("death_penalty") is not None:          # None = usar el valor por defecto del entorno
-        kwargs["death_penalty"] = cfg["death_penalty"]
+    """Parámetros de la recompensa para ``GeometryDashEnv``, a partir de los argumentos (o de un ``config.json``).
+    Los que están en None (o faltan) usan el valor por defecto del entorno; ``reward_fn`` puede ser una función o un
+    texto ``'modulo:funcion'`` (como queda en config.json)."""
+    kwargs = {"jump_penalty": cfg.get("jump_penalty") or 0.0}
+    kwargs.update({k: cfg[k] for k in REWARD_PARAMS[1:] if cfg.get(k) is not None})
+    if cfg.get("reward_fn") is not None:
+        try:
+            kwargs["reward_fn"] = load_reward_fn(cfg["reward_fn"])
+        except Exception as e:      # p. ej. una lambda o una función definida en un notebook: no se puede recargar
+            print(f"[aviso] no pude cargar reward_fn={cfg['reward_fn']!r} ({e}); se usa la recompensa por defecto "
+                  f"(sólo cambia la columna 'return' de la evaluación)", flush=True)
     return kwargs
 
 

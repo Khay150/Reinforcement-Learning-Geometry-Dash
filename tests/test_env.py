@@ -192,6 +192,52 @@ def test_death_penalty_default():
     assert GeometryDashEnv().death_penalty == 10.0
 
 
+def test_reward_params_default_and_custom():
+    """win_bonus / death_penalty / progress_scale / survive_bonus se pasan como parámetros del entorno."""
+    pol = lambda o, e: 0                       # nunca salta: choca
+    base, custom = GeometryDashEnv(obs_mode="features"), GeometryDashEnv(obs_mode="features", death_penalty=3.0)
+    _, r0 = run(base, pol)
+    _, r1 = run(custom, pol)
+    assert r1 == pytest.approx(r0 + 7.0)       # 10 - 3 menos de castigo
+    win = GeometryDashEnv(obs_mode="features", win_bonus=5.0)
+    opol = OraclePolicy(win)
+    _, ret = run(win, lambda o, e: opol.predict(o)[0])
+    assert ret == pytest.approx(1.0 + 5.0)     # progreso (1) + bonus de meta
+
+
+def test_reward_fn_new_and_legacy_signature():
+    """reward_fn(tr) y la firma vieja (prev, new, status, level) dan lo mismo; jump_penalty se suma encima."""
+    from gd_env import Transition, default_reward
+    new_style = lambda tr: default_reward(tr, death_penalty=2.0) + (0.5 if tr.jumped else 0.0)
+    legacy = lambda prev, new, status, level: (
+        (new.x - prev.x) / (level.goal_x - level.start_x) - (2.0 if status in ph.DEAD else 0.0)
+        + (1.0 if status == ph.WIN else 0.0) + (0.5 if (new.vy > 0 and prev.on_ground) else 0.0))
+    pol = lambda o, e: int(e.state.t % 3 == 0)
+    _, r_new = run(GeometryDashEnv(obs_mode="features", reward_fn=new_style), pol)
+    _, r_old = run(GeometryDashEnv(obs_mode="features", reward_fn=legacy), pol)
+    assert r_new == pytest.approx(r_old)
+    pen = GeometryDashEnv(obs_mode="features", reward_fn=new_style, jump_penalty=0.1)
+    _, r_pen = run(pen, pol)
+    assert r_pen == pytest.approx(r_new - 0.1 * len(pen._jumps))
+    with pytest.raises(TypeError):
+        GeometryDashEnv(reward_fn=lambda a, b: 0.0)
+
+
+def test_load_reward_fn_and_reward_kwargs(tmp_path):
+    from agents.runs import reward_kwargs
+    from gd_env import load_reward_fn, reward_spec
+    f = tmp_path / "mi_reward.py"
+    f.write_text("def mi_fn(tr):\n    return 1.0\n")
+    fn = load_reward_fn(f"{f}:mi_fn")
+    assert fn(None) == 1.0 and reward_spec(fn).endswith(":mi_fn")
+    kw = reward_kwargs({"jump_penalty": 0.05, "win_bonus": 2.0, "death_penalty": None, "reward_fn": f"{f}:mi_fn"})
+    assert kw["jump_penalty"] == 0.05 and kw["win_bonus"] == 2.0 and "death_penalty" not in kw
+    assert GeometryDashEnv(**kw).reward_fn is not None
+    with pytest.raises(ValueError):
+        load_reward_fn("sin_dos_puntos")
+    assert reward_kwargs({"jump_penalty": 0.1, "reward_fn": "no_existe_xyz:f"}) == {"jump_penalty": 0.1}
+
+
 def ppo_on_vec_env(random_phase=False):
     """PPO sin entrenar sobre 2 entornos (para probar callbacks)."""
     from agents import build_model, make_train_env

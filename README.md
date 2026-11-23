@@ -71,7 +71,52 @@ Cada agente deja en `runs/<run-name>/<algo>/seed<N>/` el modelo final, el mejor 
 - **Hiperparámetros** (`agents/common.py`): PPO `n_steps=256` × 8 entornos, red [64, 64], `ent_coef=0.01`; A2C `lr=7e-4`, `n_steps=16` × 8 entornos, `ent_coef=0.01`; DQN `lr=1e-3`, buffer 100k, ε 1→0.05 en el 30% del entrenamiento; QR-DQN igual que DQN con 50 cuantiles. Son un punto de partida, no están tuneados.
 - **Observación** (`--obs`): `features` (vector + `MlpPolicy`, el baseline), `grid` (imagen 3×7×16 + CNN propia) o `dict` (grilla + vector). Detalle de la red en "Observaciones y CNN".
 - Penalización por salto, qué se guarda y continuar un entrenamiento: ver las secciones de abajo.
-- La recompensa se cambia pasando `reward_fn` en `make_train_env(..., reward_fn=...)` (`agents/common.py`) y en `evaluate_policy_phases(..., reward_fn=...)`.
+- La recompensa se configura por parámetros o con una función propia: ver "Recompensa y `train()`" justo abajo.
+
+### Recompensa y `train()`
+Todo lo de la recompensa se pasa como parámetro, por línea de comandos o desde Python con `agents.train`:
+
+| Parámetro (Python) | Flag | Por defecto | Qué hace |
+|---|---|---|---|
+| `win_bonus` | `--win-bonus` | 1 | premio al llegar a la meta |
+| `death_penalty` | `--death-penalty` | 10 | castigo al morir |
+| `jump_penalty` | `--jump-penalty` | 0 | castigo por cada salto efectivo (con `ramp`, el máximo) |
+| `progress_scale` | `--progress-scale` | 1 | lo que vale cruzar todo el nivel |
+| `survive_bonus` | `--survive-bonus` | 0 | bonus por tick vivo |
+| `reward_fn` | `--reward-fn archivo.py:funcion` | — | reemplaza la recompensa de por defecto (ver abajo) |
+
+```python
+from agents import train, summarize
+out = train("ppo", seeds=[0, 1], timesteps=200_000, win_bonus=2.0, death_penalty=5.0, jump_penalty=0.05)
+print(summarize(out["final"]))          # out["root"] = carpeta de la corrida
+```
+```bash
+python scripts/train.py --algos ppo --win-bonus 2 --death-penalty 5 --jump-penalty 0.05
+```
+`train` acepta los mismos argumentos que `scripts/train.py` (`obs`, `train_phase`, `n_envs`, `ramp`, `init_model`, ...) y guarda
+todo en `config.json`, de modo que `scripts/evaluate.py` re-evalúa con la misma recompensa.
+
+**Recompensa propia.** Se escribe una función que recibe un `Transition` (qué pasó en el tick) y devuelve un float; se puede
+partir de `default_reward` y modificarla. Cualquier archivo `.py` sirve (ejemplo en `ejemplos/reward_ejemplo.py`):
+```python
+from gd_env import Transition, default_reward
+
+def mi_recompensa(tr: Transition) -> float:
+    r = default_reward(tr, win_bonus=2.0, death_penalty=5.0)    # opcional: partir de la de por defecto
+    return r - 0.05 if tr.jumped else r
+```
+```bash
+python scripts/train.py --algos ppo --reward-fn mi_archivo.py:mi_recompensa
+```
+```python
+train("ppo", reward_fn=mi_recompensa)             # o directo: GeometryDashEnv(reward_fn=mi_recompensa)
+```
+`tr` tiene `prev`/`new` (estados), `status`, `dead`, `won`, `jumped`, `dx`, `d_progress`, `progress` y `level` (detalle en
+`gd_env/rewards.py`). Si hay `reward_fn`, `win_bonus`/`death_penalty`/`progress_scale`/`survive_bonus` no se usan (los
+reemplaza la función); `jump_penalty` se sigue sumando. La firma vieja `reward_fn(prev, new, status, level)` también funciona.
+En config.json la función queda como `modulo:nombre`: con funciones definidas en un notebook o lambdas, `evaluate.py` no puede
+recargarla y re-evalúa con la recompensa por defecto (sólo cambia la columna `return`).
+
 
 ### Penalización por salto (opcional)
 Sin penalización el agente aprende a ganar saltando casi sin parar (~27 saltos contra 13 del oráculo): saltar de más
@@ -183,7 +228,7 @@ Cada fila de `evaluate_policy_phases` tiene: `x0, success, progress, return, tic
 - **Acción**: 0 = nada, 1 = saltar (sólo surte efecto apoyado; equivale a mantener apretado).
 - **Muerte**: choque de costado con un bloque, pincho (hitbox 0.3×0.3), o caer a un pozo.
 - **Observación `grid`**: (3, 7, 16) = bloques / pinchos / jugador, ventana ego-céntrica. No incluye la velocidad vertical; por eso existe `dict` (grilla + vector).
-- **Recompensa por defecto**: progreso (suma 1 en el nivel) + 1 al ganar − 10 al morir (`death_penalty`). Reemplazable con `reward_fn(prev, new, status, level)` para la curva de timing del profesor.
+- **Recompensa por defecto**: progreso (suma 1 en el nivel) + 1 al ganar − 10 al morir (`death_penalty`). Reemplazable con `reward_fn(tr)` (ver "Recompensa y `train()`") para la curva de timing del profesor.
 - `reset(options={"x0": ...})` cambia la fase de arranque: sirve para evaluar generalización sobre variaciones del nivel fijo. Probado con 20 fases: todas tienen solución.
 
 ## Oráculo

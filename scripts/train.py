@@ -8,27 +8,22 @@ Ejemplos
   python scripts/train.py --algos ppo dqn --obs grid --seeds 0 1 2                    # CNN sobre la grilla 3x7x16
   python scripts/train.py --algos ppo --obs dict --seeds 0                            # CNN (grilla) + MLP (vector)
   python scripts/train.py --algos ppo --jump-penalty 0.1 --ramp                       # penalización por salto con rampa
+  python scripts/train.py --algos ppo --win-bonus 2 --death-penalty 5 --jump-penalty 0.05   # parámetros de la recompensa
+  python scripts/train.py --algos ppo --reward-fn ejemplos/reward_ejemplo.py:penaliza_saltos   # recompensa propia
   python scripts/train.py --algos ppo --seeds 0 --timesteps 200000 --init-model runs/X/ppo/seed0/best_model.zip
 
 Salida (por agente) en  runs/<run-name>/<algo>/seed<N>/ :
   model.zip, best_model.zip (+ .json), checkpoints/, monitor/, eval_history.csv, eval_fases*.csv, GIFs y *_recorrido.png
 Resumen entre seeds: runs/<run-name>/resumen.md. Una corrida nunca pisa a otra. Detalle de las opciones y archivos: README.
+Desde Python: ``from agents import train; train("ppo", win_bonus=2, death_penalty=5, reward_fn=mi_fn)``.
 """
 import argparse
-import json
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))     # raíz del repo en el path: así se importan gd_env y agents
 
-from stable_baselines3.common.callbacks import CheckpointCallback
-
-from agents import ALGOS, EVAL_PHASES, ON_POLICY, build_model, make_train_env, summarize
-from agents.callbacks import BestModelCallback, PerformanceJumpPenaltyRamp
-from agents.common import load_for_training, load_model
-from agents.evaluate import describe
-from agents.runs import evaluate_and_record, reward_kwargs
+from agents import ALGOS, train
 
 
 def parse_args():
@@ -48,11 +43,16 @@ def parse_args():
     ap.add_argument("--out", default="runs")
     ap.add_argument("--no-gif", action="store_true")
 
-    g = ap.add_argument_group("recompensa")
+    g = ap.add_argument_group("recompensa (si no se pasan, valen los valores por defecto de GeometryDashEnv)")
     g.add_argument("--jump-penalty", type=float, default=0.0,
                    help="se resta en cada salto efectivo (p. ej. 0.05); 0 = sin penalización. Con --ramp es el valor máximo")
-    g.add_argument("--death-penalty", type=float, default=None,
-                   help="penalización al morir (por defecto, la de GeometryDashEnv)")
+    g.add_argument("--death-penalty", type=float, default=None, help="penalización al morir (def. 10)")
+    g.add_argument("--win-bonus", type=float, default=None, help="premio al llegar a la meta (def. 1)")
+    g.add_argument("--progress-scale", type=float, default=None, help="lo que vale cruzar todo el nivel (def. 1)")
+    g.add_argument("--survive-bonus", type=float, default=None, help="bonus por tick vivo (def. 0)")
+    g.add_argument("--reward-fn", default=None, metavar="ARCHIVO.py:FUNCION",
+                   help="recompensa propia, p. ej. ejemplos/reward_ejemplo.py:penaliza_saltos (o paquete.modulo:funcion). "
+                        "Reemplaza a la de por defecto (--jump-penalty se sigue sumando). Ver gd_env/rewards.py")
 
     g = ap.add_argument_group("rampa de la penalización por salto (opcional)")
     g.add_argument("--ramp", action="store_true",
@@ -67,105 +67,16 @@ def parse_args():
     g.add_argument("--eval-freq", type=int, default=25_000, help="evalúa cada N pasos y guarda best_model.zip (0 = no)")
     g.add_argument("--init-model", default=None,
                    help="seguir entrenando este .zip en vez de empezar de cero (un solo algoritmo en --algos)")
-
-    a = ap.parse_args()
-    # Combinaciones inválidas: se cortan acá, antes de gastar tiempo entrenando.
-    if a.ramp and not a.jump_penalty:
-        ap.error("--ramp necesita --jump-penalty > 0 (el valor máximo de c)")
-    if a.init_model and len(a.algos) != 1:
-        ap.error("--init-model requiere un solo algoritmo en --algos (el del modelo)")
-    if a.init_model and not Path(a.init_model).is_file():
-        ap.error(f"no existe el modelo {a.init_model}")
-    return a
-
-
-def run_name(a) -> str:
-    """Nombre de la carpeta de la corrida, armado con las opciones (p. ej. ``grid_fixed_jp0.05_ramp``) salvo --run-name."""
-    parts = [a.obs, a.train_phase]
-    if a.jump_penalty:
-        parts.append(f"jp{a.jump_penalty:g}")
-    if a.ramp:
-        parts.append("ramp")
-    if a.death_penalty is not None:
-        parts.append(f"dp{a.death_penalty:g}")
-    if a.init_model:
-        parts.append("continuado")
-    return a.run_name or "_".join(parts)
-
-
-def unique_dir(path: Path) -> Path:
-    """No pisar corridas anteriores: si la carpeta ya existe, se agrega fecha y hora."""
-    if not path.exists():
-        return path
-    new = path.with_name(f"{path.name}_{time.strftime('%Y%m%d-%H%M%S')}")
-    print(f"[aviso] {path} ya existe: esta corrida se guarda en {new}", flush=True)
-    return new
-
-
-def make_callbacks(a, d: Path, n_envs: int, env_kwargs: dict) -> list:
-    """Callbacks de SB3 de la corrida: checkpoints periódicos, rampa de la penalización por salto y mejor modelo."""
-    callbacks = []
-    if a.checkpoint_freq > 0:          # save_freq cuenta llamadas al VecEnv: cada una son n_envs pasos
-        callbacks.append(CheckpointCallback(max(a.checkpoint_freq // n_envs, 1), str(d / "checkpoints"), "model"))
-    if a.ramp:
-        callbacks.append(PerformanceJumpPenaltyRamp(a.jump_penalty, a.ramp_step, a.ramp_window, a.ramp_up,
-                                                    a.ramp_down, log_path=d / "jump_penalty.csv"))
-    if a.eval_freq > 0:                # después de la rampa: así registra el c vigente en cada evaluación
-        callbacks.append(BestModelCallback(a.eval_freq, d, a.obs, **env_kwargs))
-    return callbacks
-
-
-def train_one(a, algo: str, seed: int, d: Path, env_kwargs: dict):
-    """Entrena un agente, lo guarda y evalúa el modelo final y el mejor. Devuelve (filas_final, filas_mejor)."""
-    n_envs = a.n_envs if algo in ON_POLICY else 1       # PPO/A2C: varios entornos en paralelo; DQN/QR-DQN: uno
-    env = make_train_env(a.obs, n_envs, seed, random_phase=a.train_phase == "random",
-                         monitor_dir=str(d / "monitor"), **env_kwargs)
-    if a.init_model:                                    # seguir entrenando un modelo ya guardado (fine-tuning)
-        model = load_for_training(algo, a.init_model, env, seed)
-    else:                                               # modelo nuevo; a.obs decide MLP (features) o CNN (grid/dict)
-        model = build_model(algo, env, seed, a.obs)
-
-    t0 = time.time()
-    model.learn(total_timesteps=a.timesteps, callback=make_callbacks(a, d, n_envs, env_kwargs))
-    model.save(d / "model")                             # modelo final (puede no ser el mejor: ver best_model.zip)
-    env.close()
-
-    final = evaluate_and_record(model, d / "model.zip", a.obs, env_kwargs, gif=not a.no_gif)
-    print(f"[{algo} seed{seed}] {time.time() - t0:.0f}s  final: {describe(final)}", flush=True)
-    if not (d / "best_model.zip").exists():             # sin --eval-freq no se guarda un mejor modelo
-        return final, None
-    best = evaluate_and_record(load_model(algo, str(d / "best_model.zip")), d / "best_model.zip", a.obs, env_kwargs,
-                               gif=not a.no_gif)
-    step = json.loads((d / "best_model.json").read_text())["timesteps"]
-    print(f"[{algo} seed{seed}] mejor (paso {step}): {describe(best)}", flush=True)
-    return final, best
+    return ap.parse_args()
 
 
 def main():
-    a = parse_args()
-    env_kwargs = reward_kwargs(vars(a))                 # parámetros de la recompensa que van al entorno
-    root = unique_dir(Path(a.out) / run_name(a))
-    root.mkdir(parents=True)
-    # config al principio: si la corrida se corta, igual queda registrado con qué se entrenó
-    (root / "config.json").write_text(json.dumps({**vars(a), "eval_phases": EVAL_PHASES}, indent=2))
-
-    finals, bests = {}, {}                              # nombre del agente -> lista (una por seed) de evaluaciones
-    for algo in a.algos:
-        for seed in a.seeds:
-            d = root / algo / f"seed{seed}"
-            d.mkdir(parents=True)
-            final, best = train_one(a, algo, seed, d, env_kwargs)
-            name = f"{algo.upper()} ({root.name})"
-            finals.setdefault(name, []).append(final)
-            if best:
-                bests.setdefault(name, []).append(best)
-
-    # Tabla resumen entre seeds (media ± desvío) del modelo final y, si existe, del mejor.
-    text = "## Modelo final\n\n" + summarize(finals) + "\n"
-    if bests:
-        text += "\n## Mejor modelo (best_model.zip)\n\n" + summarize(bests) + "\n"
-    (root / "resumen.md").write_text(text)
-    print(f"\n{text}\nResultados en {root}")
+    a = vars(parse_args())
+    a["gif"] = not a.pop("no_gif")
+    try:
+        train(**a)
+    except (ValueError, FileNotFoundError) as e:       # combinaciones inválidas / archivos que no existen
+        sys.exit(f"error: {e}")
 
 
 if __name__ == "__main__":

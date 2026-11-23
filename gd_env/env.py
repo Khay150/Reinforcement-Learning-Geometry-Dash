@@ -1,8 +1,6 @@
 """Entorno Gymnasium de un Geometry Dash minimalista (modo cubo) sobre un nivel fijo."""
 from __future__ import annotations
 
-from typing import Callable
-
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
@@ -10,9 +8,7 @@ from gymnasium import spaces
 from . import physics as ph
 from .levels import level_1
 from .physics import DEAD, WIN, Level, Physics, State
-
-# Firma de una recompensa propia: recibe el estado anterior, el nuevo, el status del tick y el nivel; devuelve un float.
-RewardFn = Callable[[State, State, str, Level], float]
+from .rewards import RewardFn, Transition, adapt_reward_fn, default_reward
 
 
 class GeometryDashEnv(gym.Env):
@@ -31,7 +27,8 @@ class GeometryDashEnv(gym.Env):
 
     Recompensa por defecto: progreso (suma 1 en todo el nivel) + win_bonus al
     terminar - death_penalty al morir + survive_bonus por tick. Se puede
-    reemplazar entera con ``reward_fn(prev, new, status, level)``.
+    reemplazar entera con ``reward_fn(tr)``, donde ``tr`` es un ``Transition`` (ver ``gd_env/rewards.py``);
+    también se acepta la firma vieja ``reward_fn(prev, new, status, level)``.
 
     ``jump_penalty``: se resta en cada salto *efectivo* (acción 1 con el cubo
     apoyado; apretar 1 en el aire no cuesta nada). Se aplica también si hay
@@ -52,7 +49,7 @@ class GeometryDashEnv(gym.Env):
         death_penalty: float = 10.0,     # castigo al morir (alto frente a jump_penalty: morir cuesta más que saltar)
         survive_bonus: float = 0.0,      # bonus por tick vivo (0 = no se usa)
         jump_penalty: float = 0.0,       # castigo por cada salto efectivo (0 = no se usa)
-        reward_fn: RewardFn | None = None,   # reemplaza la recompensa por defecto
+        reward_fn: RewardFn | None = None,   # reemplaza la recompensa por defecto (ver gd_env/rewards.py)
         max_steps: int | None = None,    # límite de ticks por episodio (por defecto 1.5x lo que dura el nivel)
         render_mode: str | None = None,
     ):
@@ -63,7 +60,7 @@ class GeometryDashEnv(gym.Env):
         self.progress_scale, self.win_bonus = progress_scale, win_bonus
         self.death_penalty, self.survive_bonus = death_penalty, survive_bonus
         self.jump_penalty = jump_penalty
-        self.reward_fn = reward_fn
+        self.reward_fn = reward_fn                       # property: acepta fn(tr) o fn(prev, new, status, level)
         self.render_mode = render_mode
 
         # Ticks que dura el nivel a velocidad constante; el episodio se trunca a 1.5x para no quedar colgado.
@@ -108,7 +105,8 @@ class GeometryDashEnv(gym.Env):
         self.state, self.status = ph.step(self.level, self.p, prev, int(action))
         self._trail.append((self.state.x, self.state.y))
 
-        reward = self._reward(prev, self.state, self.status)
+        tr = Transition(prev, self.state, self.status, self.level, jumped)
+        reward = self._reward(tr)
         if jumped:                                          # la penalización por salto se suma a cualquier recompensa
             reward -= self.jump_penalty
         terminated = self.status in DEAD or self.status == WIN     # murió o ganó
@@ -117,17 +115,20 @@ class GeometryDashEnv(gym.Env):
         return self._obs(), float(reward), terminated, truncated, self._info()
 
     # ------------------------------------------------------------ internals
-    def _reward(self, prev: State, new: State, status: str) -> float:
-        """Recompensa por defecto: avanzar vale (x recorrida / largo del nivel), así que cruzarlo entero suma ~1."""
-        if self.reward_fn is not None:
-            return self.reward_fn(prev, new, status, self.level)
-        span = self.level.goal_x - self.level.start_x
-        r = self.progress_scale * (new.x - prev.x) / span + self.survive_bonus
-        if status in DEAD:
-            r -= self.death_penalty
-        elif status == WIN:
-            r += self.win_bonus
-        return r
+    @property
+    def reward_fn(self) -> RewardFn | None:
+        return self._reward_fn
+
+    @reward_fn.setter
+    def reward_fn(self, fn):
+        self._reward_fn = adapt_reward_fn(fn)
+
+    def _reward(self, tr: Transition) -> float:
+        """Recompensa del tick: la de ``reward_fn`` si hay, si no la de por defecto con los parámetros del entorno."""
+        if self._reward_fn is not None:
+            return float(self._reward_fn(tr))
+        return default_reward(tr, progress_scale=self.progress_scale, win_bonus=self.win_bonus,
+                              death_penalty=self.death_penalty, survive_bonus=self.survive_bonus)
 
     def _info(self) -> dict:
         """Datos extra que devuelve Gymnasium en cada reset/step (no son la observación del agente)."""

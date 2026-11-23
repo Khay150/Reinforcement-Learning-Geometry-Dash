@@ -75,6 +75,12 @@ python scripts/train.py --algos ppo a2c dqn qrdqn --seeds 0 1 2 --timesteps 3000
 # con penalización por salto efectivo (el run queda con sufijo _jp0.05)
 python scripts/train.py --algos ppo --seeds 0 1 2 --jump-penalty 0.05
 
+# cambiar la recompensa por parámetros (si no se pasan, valen los valores por defecto: win 1, muerte 10, salto 0)
+python scripts/train.py --algos ppo --seeds 0 --win-bonus 2 --death-penalty 5 --jump-penalty 0.05
+
+# recompensa propia: una función de un .py (ver ejemplos/reward_ejemplo.py); correr siempre desde la raíz del repo
+python scripts/train.py --algos ppo --seeds 0 --reward-fn ejemplos/reward_ejemplo.py:penaliza_saltos
+
 # penalización por salto con rampa: c arranca en 0 y sube de a poco, sólo cuando el agente ya gana
 python scripts/train.py --algos ppo --seeds 0 1 2 --jump-penalty 0.1 --ramp
 
@@ -91,6 +97,7 @@ python scripts/train.py --algos ppo dqn --obs dict --seeds 0 1 2 --timesteps 300
 ```
 Opciones útiles: `--algos ppo` (solo uno; valores posibles: `ppo`, `a2c`, `dqn`, `qrdqn`), `--seeds 0` (una seed),
 `--n-envs 8` (entornos en paralelo, solo PPO y A2C), `--jump-penalty 0.05` (penaliza cada salto efectivo),
+`--win-bonus`, `--death-penalty`, `--progress-scale`, `--survive-bonus` (parámetros de la recompensa), `--reward-fn archivo.py:funcion` (recompensa propia),
 `--obs features|grid|dict` (tipo de observación: vector con MLP, o grilla / grilla + vector con CNN; ver el README),
 `--ramp` (la penalización sube gradualmente), `--init-model <zip>` (sigue entrenando un modelo),
 `--no-gif` (no graba GIFs), `--out runs` (carpeta de salida). Todas las opciones: `python scripts/train.py -h`.
@@ -100,6 +107,13 @@ Por cada agente se guarda en `runs/<run-name>/<algo>/seed<N>/`:
 `monitor/` (curva de aprendizaje), `eval_history.csv`, `eval_fases.csv`, `episodio_x0_<x0>.gif` y `*_recorrido.png`.
 La tabla comparativa entre seeds queda en `runs/<run-name>/resumen.md`. Si la carpeta de la corrida ya existe,
 la nueva se guarda con fecha y hora en el nombre (no se pisa nada).
+
+También se puede entrenar desde Python (notebook o script propio), con los mismos parámetros:
+```python
+from agents import train
+train("ppo", seeds=[0], timesteps=200_000, win_bonus=2.0, death_penalty=5.0, jump_penalty=0.05)
+train("ppo", reward_fn=mi_recompensa)      # función propia; ver "Recompensa y `train()`" en el README
+```
 
 ## 7. Re-evaluar modelos ya entrenados
 
