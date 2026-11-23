@@ -20,6 +20,7 @@ from .physics import Level, Physics, State
 
 @dataclass
 class Plan:
+    """Resultado del planificador: la secuencia de acciones ganadora y dónde/cuándo salta."""
     actions: list[int]          # acción por tick desde el estado inicial
     jump_ticks: list[int]       # ticks (absolutos) donde se salta efectivamente
     jump_x: list[float]         # posición x del cubo al despegar
@@ -30,34 +31,38 @@ class Plan:
 def solve(level: Level, p: Physics, start: State | None = None, max_ticks: int = 5000) -> Plan | None:
     """Devuelve el plan de mínimos saltos desde ``start`` (o None si no hay solución)."""
     start = start or ph.initial_state(level, p)
+    # ``layer``: estados vivos del tick actual -> (estado, saltos usados para llegar). Se avanza un tick por iteración.
     layer: dict[tuple, tuple[State, int]] = {start.key(): (start, 0)}    # key -> (estado, saltos)
     back: list[dict[tuple, tuple[tuple, int]]] = []                      # por capa: key -> (key_prev, acción)
     winners: dict[tuple, tuple[State, int]] = {}
 
     for _ in range(max_ticks):
+        # ``nxt``: estados del tick siguiente. ``parent``: de qué estado y con qué acción se llegó a cada uno.
         nxt: dict[tuple, tuple[State, int]] = {}
         parent: dict[tuple, tuple[tuple, int]] = {}
         for k, (s, cost) in layer.items():
             for a in ((0, 1) if s.on_ground else (0,)):     # en el aire el salto no hace nada
                 ns, status = ph.step(level, p, s, a)
                 if status in ph.DEAD:
-                    continue
+                    continue                                    # camino que muere: se descarta
                 nk, ncost = ns.key(), cost + (1 if a == 1 else 0)
+                # Si dos caminos llegan al mismo estado, se queda el que usó menos saltos (programación dinámica).
                 tgt = winners if status == ph.WIN else nxt
                 if nk not in tgt or ncost < tgt[nk][1]:
                     tgt[nk] = (ns, ncost)
                     parent[nk] = (k, a)
         back.append(parent)
-        if winners:
+        if winners:                      # alguien llegó a la meta: se elige el ganador con menos saltos
             end_key = min(winners, key=lambda kk: winners[kk][1])
             return _reconstruct(back, end_key, start, winners[end_key][1], p)
         if not nxt:
-            return None
+            return None                  # no queda ningún estado vivo: el nivel no tiene solución desde ``start``
         layer = nxt
     return None
 
 
 def _reconstruct(back, end_key, start: State, n_jumps: int, p: Physics) -> Plan:
+    """Recorre los ``parent`` de atrás para adelante desde el estado ganador y arma la lista de acciones."""
     actions, key = [], end_key
     for parent in reversed(back):
         key, a = parent[key][0], parent[key][1]
@@ -68,6 +73,7 @@ def _reconstruct(back, end_key, start: State, n_jumps: int, p: Physics) -> Plan:
 
 
 def annotate_jumps(level: Level, p: Physics, start: State, plan: Plan) -> Plan:
+    """Re-simula el plan y completa ``jump_ticks`` / ``jump_x`` con los saltos que realmente despegan."""
     s, ticks, xs = start, [], []
     for a in plan.actions:
         if a == 1 and s.on_ground:
@@ -87,14 +93,15 @@ class Oracle:
 
     def __init__(self, level: Level, p: Physics):
         self.level, self.p = level, p
-        self._cache: dict[tuple, Plan | None] = {}
-        self._act: dict[tuple, int] = {}
+        self._cache: dict[tuple, Plan | None] = {}     # plan ya resuelto desde cada estado inicial
+        self._act: dict[tuple, int] = {}               # acción óptima de cada estado visitado por algún plan
 
     @staticmethod
     def _k(s: State) -> tuple:
         return (s.x0, *s.key())          # x0 forma parte de la clave: define la fase
 
     def plan(self, start: State | None = None) -> Plan | None:
+        """Plan óptimo desde ``start`` (se calcula una vez y se cachea)."""
         start = start or ph.initial_state(self.level, self.p)
         k = self._k(start)
         if k not in self._cache:
@@ -118,6 +125,7 @@ class Oracle:
         return self._act.get(k, 0)
 
     def is_winnable(self, state: State) -> bool:
+        """¿Todavía se puede ganar desde este estado? (sirve para detectar si el agente ya "arruinó" el episodio)."""
         return self.plan(state) is not None
 
 
@@ -132,4 +140,5 @@ class OraclePolicy:
         self.oracle = Oracle(self.env.level, self.env.p)
 
     def predict(self, obs=None, state=None, episode_start=None, deterministic=True):
+        # No usa ``obs``: mira el estado interno del entorno. Los argumentos extra existen sólo para imitar a SB3.
         return self.oracle.action(self.env.state), None

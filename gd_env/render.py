@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw
 from . import physics as ph
 from .physics import DEAD, Level, State
 
+# Colores (RGB). El cielo es un degradé vertical de SKY_TOP a SKY_BOT.
 SKY_TOP, SKY_BOT = (70, 90, 200), (120, 160, 240)
 BLOCK_FILL, BLOCK_EDGE = (25, 25, 45), (90, 90, 140)
 SPIKE_COL = (230, 60, 60)
@@ -20,6 +21,7 @@ PLAYER_FILL, PLAYER_EDGE = (250, 210, 40), (60, 40, 0)
 
 
 def _sky(w: int, h: int) -> Image.Image:
+    """Fondo con degradé vertical de tamaño w x h."""
     t = np.linspace(0, 1, h)[:, None, None]
     top, bot = np.array(SKY_TOP), np.array(SKY_BOT)
     arr = (top * (1 - t) + bot * t).astype(np.uint8).repeat(w, axis=1)
@@ -45,10 +47,10 @@ def render_frame(level: Level, state: State, status: str = ph.OK, trail=None, ju
                  cols: int = 24, cell: int = 24, cam_lead: float = 6.0) -> np.ndarray:
     """Un frame con cámara que sigue al cubo (el cubo queda ``cam_lead`` tiles desde la izquierda)."""
     H = level.height
-    W, Hpx = cols * cell, H * cell
+    W, Hpx = cols * cell, H * cell              # tamaño en píxeles del área de juego (la barra de HUD va abajo, +28 px)
     img = _sky(W, Hpx + 28)
     d = ImageDraw.Draw(img)
-    cam = state.x - cam_lead
+    cam = state.x - cam_lead                    # x (en tiles) del borde izquierdo de la cámara
     _draw_tiles(d, level, int(np.floor(cam)), int(np.floor(cam)) + cols + 2, cell, cam, H)
 
     for (tx, ty) in (trail or [])[-120:]:                       # estela
@@ -59,7 +61,7 @@ def render_frame(level: Level, state: State, status: str = ph.OK, trail=None, ju
         if 0 <= px <= W:
             d.polygon([(px, py + 6), (px - 5, py + 14), (px + 5, py + 14)], fill=(120, 255, 160))
 
-    px, py = (state.x - cam) * cell, (H - state.y - 1) * cell
+    px, py = (state.x - cam) * cell, (H - state.y - 1) * cell     # el eje y de la imagen apunta hacia abajo
     col = (255, 90, 90) if status in DEAD else PLAYER_FILL
     d.rectangle([px, py, px + cell - 1, py + cell - 1], fill=col, outline=PLAYER_EDGE, width=2)
     d.rectangle([px + cell * .55, py + cell * .25, px + cell * .8, py + cell * .45], fill=PLAYER_EDGE)  # ojo
@@ -94,6 +96,7 @@ def trajectory_image(level: Level, trail, jumps=(), status: str = ph.OK, cell: i
 
 
 def _act(policy, obs, env):
+    """Acción (int) de cualquier tipo de política: objeto con ``predict`` (SB3, oráculo) o función ``f(obs)``."""
     if hasattr(policy, "predict"):
         a = policy.predict(obs, deterministic=True)
         a = a[0] if isinstance(a, tuple) else a
@@ -110,7 +113,7 @@ def record_episode(env, policy, gif_path: str | None = "episode.gif", trajectory
     ``frame_skip``: se guarda 1 de cada N ticks (2 → GIF más liviano y fluido).
     Devuelve ``info`` final más ``return`` y la lista de ``frames``.
     """
-    u = env.unwrapped
+    u = env.unwrapped                           # entorno sin wrappers: se necesita el estado interno para dibujar
     obs, info = env.reset(seed=seed, options=options)
     frames = [render_frame(u.level, u.state, u.status, u._trail, u._jumps)]
     done, ret = False, 0.0

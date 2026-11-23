@@ -27,13 +27,15 @@ import numpy as np
 
 EMPTY, BLOCK, SPIKE = 0, 1, 2
 
-# Estados terminales posibles de un tick.
+# Estados posibles de un tick (el ``status`` que devuelve ``step``). OK = sigue vivo; CRASH / SPIKE_HIT / FELL = murió
+# (choque de costado, pincho, caída a un pozo); WIN = llegó a la meta. Todos menos OK terminan el episodio.
 OK, CRASH, SPIKE_HIT, FELL, WIN = "ok", "crash", "spike", "fell", "win"
 DEAD = (CRASH, SPIKE_HIT, FELL)
 
 
 @dataclass(frozen=True)
 class Physics:
+    """Constantes de la dinámica (inmutable). Con estos valores el salto dura ~16 ticks y sube ~1.5 tiles."""
     vx: float = 0.2          # tiles/tick (avance horizontal constante)
     gravity: float = 0.05    # tiles/tick^2
     jump_v: float = 0.4      # velocidad vertical inicial del salto
@@ -44,6 +46,7 @@ class Physics:
 
 
 class State(NamedTuple):
+    """Estado completo del cubo en un tick. Es inmutable: ``step`` devuelve un State nuevo en vez de modificar éste."""
     t: int            # ticks transcurridos
     x0: float         # x inicial (x(t) = x0 + vx * t, no hay deriva numérica)
     x: float          # borde izquierdo del cubo
@@ -53,6 +56,8 @@ class State(NamedTuple):
 
     def key(self) -> tuple:
         """Clave hashable para deduplicar estados en la búsqueda del oráculo."""
+        # x no entra en la clave porque depende sólo de t; los decimales se redondean para que dos caminos que llegan
+        # al "mismo" estado (salvo error de coma flotante) cuenten como uno solo.
         return (self.t, round(self.y, 7), round(self.vy, 7), self.on_ground)
 
 
@@ -61,10 +66,11 @@ class Level:
 
     def __init__(self, grid: np.ndarray, goal_x: float, start_x: float = 2.0, name: str = "level"):
         self.grid = np.asarray(grid, dtype=np.uint8)
-        self.height, self.length = self.grid.shape
-        self.goal_x = float(goal_x)
-        self.start_x = float(start_x)
+        self.height, self.length = self.grid.shape      # alto (filas) y largo (columnas) del nivel, en tiles
+        self.goal_x = float(goal_x)                      # al llegar a esta x se gana
+        self.start_x = float(start_x)                    # x donde arranca el cubo (fase por defecto)
         self.name = name
+        # Posiciones de los pinchos precalculadas: las colisiones con pinchos se consultan en cada tick.
         self._spikes = {(int(r), int(c)) for r, c in zip(*np.nonzero(self.grid == SPIKE))}
 
     def tile(self, row: int, col: int) -> int:
@@ -84,6 +90,7 @@ class Level:
 
 
 def initial_state(level: Level, p: Physics, x0: float | None = None) -> State:
+    """Estado de arranque: cubo apoyado en el piso (y=1) en ``x0`` (o en ``level.start_x`` si no se indica)."""
     x0 = level.start_x if x0 is None else float(x0)
     return State(t=0, x0=x0, x=x0, y=1.0, vy=0.0, on_ground=True)
 
@@ -91,6 +98,8 @@ def initial_state(level: Level, p: Physics, x0: float | None = None) -> State:
 def _solid_tiles(level: Level, p: Physics, x: float, y: float) -> list[tuple[int, int]]:
     """(fila, col) de los bloques que se solapan (área > 0) con el cubo en (x, y)."""
     e = p.eps
+    # Rango de columnas / filas que toca el cuadrado del cubo. El ``eps`` evita que un cubo que apenas roza
+    # el borde de un tile (por error numérico) cuente como solapado.
     c0, c1 = math.floor(x + e), math.floor(x + 1 - e)
     r0, r1 = math.floor(y + e), math.floor(y + 1 - e)
     out = []
@@ -102,6 +111,8 @@ def _solid_tiles(level: Level, p: Physics, x: float, y: float) -> list[tuple[int
 
 
 def _spike_hit(level: Level, p: Physics, x: float, y: float) -> bool:
+    """¿El cubo en (x, y) toca la hitbox de algún pincho? La hitbox es más chica que el tile (``spike_w`` x ``spike_h``)
+    y está centrada: así rozar la punta no mata, como en el juego."""
     e = p.eps
     lo, hi = (1 - p.spike_w) / 2, (1 + p.spike_w) / 2
     for c in range(math.floor(x), math.floor(x + 1) + 1):
@@ -113,12 +124,17 @@ def _spike_hit(level: Level, p: Physics, x: float, y: float) -> bool:
 
 
 def step(level: Level, p: Physics, s: State, action: int) -> tuple[State, str]:
-    """Avanza un tick. Devuelve (nuevo_estado, status)."""
+    """Avanza un tick. Devuelve (nuevo_estado, status).
+
+    Orden de cada tick: (0) velocidad vertical por salto/gravedad, (1) avance horizontal y choque de costado,
+    (2) movimiento vertical, aterrizaje o golpe de techo, (3) pinchos, caída y meta.
+    """
+    # 0) Sólo se salta si está apoyado; la gravedad se aplica siempre y la caída se limita a ``max_fall``.
     vy = p.jump_v if (action == 1 and s.on_ground) else s.vy
     vy = max(vy - p.gravity, -p.max_fall)
 
     t = s.t + 1
-    x = s.x0 + p.vx * t
+    x = s.x0 + p.vx * t        # x se calcula desde x0 y t (no se acumula) para no arrastrar error de coma flotante
 
     # 1) Avance horizontal: chocar de costado contra un bloque mata.
     hit_side = _solid_tiles(level, p, x, s.y)
@@ -130,7 +146,7 @@ def step(level: Level, p: Physics, s: State, action: int) -> tuple[State, str]:
     # 2) Movimiento vertical y resolución de colisiones.
     y, on_ground = s.y + vy, False
     hit = _solid_tiles(level, p, x, y)
-    if hit:
+    if hit:                                           # el movimiento vertical se metió en un bloque
         if vy <= 0:                                   # aterriza sobre el tile más alto
             y = max(r + 1 for r, _ in hit)
             on_ground = True
@@ -138,6 +154,7 @@ def step(level: Level, p: Physics, s: State, action: int) -> tuple[State, str]:
             y = min(r for r, _ in hit) - 1.0
         vy = 0.0
 
+    # 3) Estado nuevo y condiciones de fin: pincho, caída bajo el piso (pozo) o llegar a la meta.
     new = State(t, s.x0, x, y, vy, on_ground)
     if _spike_hit(level, p, x, y):
         return new, SPIKE_HIT

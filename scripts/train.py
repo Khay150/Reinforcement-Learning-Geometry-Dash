@@ -5,6 +5,8 @@ Ejemplos
   python scripts/train.py --algos ppo dqn --seeds 0 1 2 --timesteps 300000
   python scripts/train.py --algos ppo a2c dqn qrdqn --seeds 0 1 2 --timesteps 300000 --run-name e1_algoritmos
   python scripts/train.py --algos ppo --seeds 0 --timesteps 20000 --run-name humo     # prueba rápida
+  python scripts/train.py --algos ppo dqn --obs grid --seeds 0 1 2                    # CNN sobre la grilla 3x7x16
+  python scripts/train.py --algos ppo --obs dict --seeds 0                            # CNN (grilla) + MLP (vector)
   python scripts/train.py --algos ppo --jump-penalty 0.1 --ramp                       # penalización por salto con rampa
   python scripts/train.py --algos ppo --seeds 0 --timesteps 200000 --init-model runs/X/ppo/seed0/best_model.zip
 
@@ -18,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))     # raíz del repo en el path: así se importan gd_env y agents
 
 from stable_baselines3.common.callbacks import CheckpointCallback
 
@@ -30,13 +32,15 @@ from agents.runs import evaluate_and_record, reward_kwargs
 
 
 def parse_args():
+    """Define y valida las opciones de línea de comandos (ver ``python scripts/train.py -h``)."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--algos", nargs="+", default=["ppo", "dqn"], choices=list(ALGOS))
     ap.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2])
     ap.add_argument("--timesteps", type=int, default=300_000,
                     help="pasos de entrenamiento (con --init-model: pasos adicionales)")
-    ap.add_argument("--obs", default="features", choices=["features"],
-                    help="grid/dict requieren un extractor CNN propio (todavía no implementado)")
+    ap.add_argument("--obs", default="features", choices=["features", "grid", "dict"],
+                    help="observación: features (vector + MlpPolicy), grid (imagen 3x7x16 + CNN propia) "
+                         "o dict (grilla + vector, CNN + MLP). Ver agents/cnn.py")
     ap.add_argument("--train-phase", default="fixed", choices=["fixed", "random"],
                     help="fixed: siempre x0=2.0 (nivel fijo). random: x0 aleatorio en cada episodio")
     ap.add_argument("--n-envs", type=int, default=8, help="entornos en paralelo (sólo PPO/A2C; DQN y QR-DQN usan 1)")
@@ -65,6 +69,7 @@ def parse_args():
                    help="seguir entrenando este .zip en vez de empezar de cero (un solo algoritmo en --algos)")
 
     a = ap.parse_args()
+    # Combinaciones inválidas: se cortan acá, antes de gastar tiempo entrenando.
     if a.ramp and not a.jump_penalty:
         ap.error("--ramp necesita --jump-penalty > 0 (el valor máximo de c)")
     if a.init_model and len(a.algos) != 1:
@@ -75,6 +80,7 @@ def parse_args():
 
 
 def run_name(a) -> str:
+    """Nombre de la carpeta de la corrida, armado con las opciones (p. ej. ``grid_fixed_jp0.05_ramp``) salvo --run-name."""
     parts = [a.obs, a.train_phase]
     if a.jump_penalty:
         parts.append(f"jp{a.jump_penalty:g}")
@@ -97,6 +103,7 @@ def unique_dir(path: Path) -> Path:
 
 
 def make_callbacks(a, d: Path, n_envs: int, env_kwargs: dict) -> list:
+    """Callbacks de SB3 de la corrida: checkpoints periódicos, rampa de la penalización por salto y mejor modelo."""
     callbacks = []
     if a.checkpoint_freq > 0:          # save_freq cuenta llamadas al VecEnv: cada una son n_envs pasos
         callbacks.append(CheckpointCallback(max(a.checkpoint_freq // n_envs, 1), str(d / "checkpoints"), "model"))
@@ -110,22 +117,22 @@ def make_callbacks(a, d: Path, n_envs: int, env_kwargs: dict) -> list:
 
 def train_one(a, algo: str, seed: int, d: Path, env_kwargs: dict):
     """Entrena un agente, lo guarda y evalúa el modelo final y el mejor. Devuelve (filas_final, filas_mejor)."""
-    n_envs = a.n_envs if algo in ON_POLICY else 1
+    n_envs = a.n_envs if algo in ON_POLICY else 1       # PPO/A2C: varios entornos en paralelo; DQN/QR-DQN: uno
     env = make_train_env(a.obs, n_envs, seed, random_phase=a.train_phase == "random",
                          monitor_dir=str(d / "monitor"), **env_kwargs)
-    if a.init_model:
+    if a.init_model:                                    # seguir entrenando un modelo ya guardado (fine-tuning)
         model = load_for_training(algo, a.init_model, env, seed)
-    else:
+    else:                                               # modelo nuevo; a.obs decide MLP (features) o CNN (grid/dict)
         model = build_model(algo, env, seed, a.obs)
 
     t0 = time.time()
     model.learn(total_timesteps=a.timesteps, callback=make_callbacks(a, d, n_envs, env_kwargs))
-    model.save(d / "model")
+    model.save(d / "model")                             # modelo final (puede no ser el mejor: ver best_model.zip)
     env.close()
 
     final = evaluate_and_record(model, d / "model.zip", a.obs, env_kwargs, gif=not a.no_gif)
     print(f"[{algo} seed{seed}] {time.time() - t0:.0f}s  final: {describe(final)}", flush=True)
-    if not (d / "best_model.zip").exists():
+    if not (d / "best_model.zip").exists():             # sin --eval-freq no se guarda un mejor modelo
         return final, None
     best = evaluate_and_record(load_model(algo, str(d / "best_model.zip")), d / "best_model.zip", a.obs, env_kwargs,
                                gif=not a.no_gif)
@@ -136,13 +143,13 @@ def train_one(a, algo: str, seed: int, d: Path, env_kwargs: dict):
 
 def main():
     a = parse_args()
-    env_kwargs = reward_kwargs(vars(a))
+    env_kwargs = reward_kwargs(vars(a))                 # parámetros de la recompensa que van al entorno
     root = unique_dir(Path(a.out) / run_name(a))
     root.mkdir(parents=True)
     # config al principio: si la corrida se corta, igual queda registrado con qué se entrenó
     (root / "config.json").write_text(json.dumps({**vars(a), "eval_phases": EVAL_PHASES}, indent=2))
 
-    finals, bests = {}, {}
+    finals, bests = {}, {}                              # nombre del agente -> lista (una por seed) de evaluaciones
     for algo in a.algos:
         for seed in a.seeds:
             d = root / algo / f"seed{seed}"
@@ -153,6 +160,7 @@ def main():
             if best:
                 bests.setdefault(name, []).append(best)
 
+    # Tabla resumen entre seeds (media ± desvío) del modelo final y, si existe, del mejor.
     text = "## Modelo final\n\n" + summarize(finals) + "\n"
     if bests:
         text += "\n## Mejor modelo (best_model.zip)\n\n" + summarize(bests) + "\n"

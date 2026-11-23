@@ -13,7 +13,7 @@ from gd_env import physics as ph
 from .common import EVAL_PHASES
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=None)      # cache: el resultado sólo depende de x0, así que cada fase se planifica una sola vez
 def oracle_jumps(x0: float) -> int:
     """Saltos mínimos del oráculo en el nivel por defecto arrancando en ``x0``.
     Se calcula una sola vez por fase (planificar tarda ~0.15 s y se evalúa muchas veces)."""
@@ -25,13 +25,14 @@ def oracle_jumps(x0: float) -> int:
 def evaluate_policy_phases(policy, obs_mode: str = "features", phases=EVAL_PHASES, **env_kwargs) -> list[dict]:
     """Corre un episodio determinista por cada x0. ``policy`` = cualquier objeto con ``.predict``.
     ``env_kwargs`` va directo a ``GeometryDashEnv`` (p. ej. ``jump_penalty``, ``death_penalty``, ``reward_fn``)."""
+    # ``obs_mode`` tiene que ser el mismo con el que se entrenó el modelo (features / grid / dict).
     env = GeometryDashEnv(obs_mode=obs_mode, **env_kwargs)
     rows = []
-    for x0 in phases:
+    for x0 in phases:                                     # un episodio completo por cada fase de arranque
         obs, info = env.reset(seed=0, options={"x0": float(x0)})
         done, ret = False, 0.0
         while not done:
-            a, _ = policy.predict(obs, deterministic=True)
+            a, _ = policy.predict(obs, deterministic=True)    # determinista: siempre la mejor acción, sin exploración
             obs, r, term, trunc, info = env.step(int(np.asarray(a).reshape(-1)[0]))
             ret += r
             done = term or trunc
@@ -44,6 +45,7 @@ def evaluate_policy_phases(policy, obs_mode: str = "features", phases=EVAL_PHASE
 
 def metrics(rows: list[dict]) -> dict:
     """Resumen de una evaluación: fracción de fases ganadas, progreso medio y saltos medios en las ganadas."""
+    # Los saltos sólo se promedian en las fases ganadas: en una fase perdida el agente no llegó a hacer todo el recorrido.
     won = [r["n_jumps"] for r in rows if r["success"]]
     return {"success": float(np.mean([r["success"] for r in rows])),
             "progress": float(np.mean([r["progress"] for r in rows])),
@@ -81,6 +83,7 @@ def append_row(row: dict, path: str | Path):
 
 def summarize(results: dict[str, list[list[dict]]]) -> str:
     """results[nombre_agente] = lista (una por seed) de filas por fase. Devuelve una tabla markdown."""
+    # Una fila por agente; "± x" es el desvío entre seeds. "saltos / oráculo" = 1.00 sería saltar tanto como el óptimo.
     lines = ["| agente | seeds | éxito (% fases) | progreso medio | retorno medio | saltos / oráculo (fases ganadas) "
              "| seeds que ganan en todas las fases |",
              "|---|---|---|---|---|---|---|"]

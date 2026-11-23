@@ -7,11 +7,12 @@
 - `gd_env/oracle.py`: planificador exacto (programación dinámica por capas de tick) + `OraclePolicy`.
 - `gd_env/render.py`: frames, GIF del episodio y mapa del recorrido (`record_episode`).
 - `agents/__init__.py`: expone la API de agentes (`make_train_env`, `build_model`, `evaluate_policy_phases`, `summarize`, `EVAL_PHASES`, `TRAIN_PHASE_RANGE`).
-- `agents/common.py`: `make_train_env` (con/sin fase aleatoria vía el wrapper `RandomPhase`), `build_model` (PPO/A2C/DQN/QR-DQN con hiperparámetros iniciales), `load_model` y `load_for_training` (seguir entrenando un modelo).
+- `agents/common.py`: `make_train_env` (con/sin fase aleatoria vía el wrapper `RandomPhase`), `build_model` (PPO/A2C/DQN/QR-DQN con hiperparámetros iniciales; elige MLP o CNN según `obs_mode`), `policy_for` / `policy_kwargs_for`, `load_model` y `load_for_training` (seguir entrenando un modelo).
+- `agents/cnn.py`: extractores CNN propios para SB3: `GridCNN` (observación `grid`) y `GridVecCNN` (observación `dict`: CNN para la grilla + capa lineal para el vector). Ver "Observaciones y CNN".
 - `agents/callbacks.py`: callbacks de SB3: `PerformanceJumpPenaltyRamp` (rampa de la penalización por salto) y `BestModelCallback` (evalúa periódicamente y guarda el mejor modelo).
 - `agents/evaluate.py`: `evaluate_policy_phases` (un episodio determinista por fase), `metrics`/`describe`, `save_rows`/`append_row` (CSV) y `summarize` (tabla markdown entre seeds).
 - `agents/runs.py`: `evaluate_and_record` (evalúa un modelo y deja su CSV y GIFs), compartido por `train.py` y `evaluate.py`.
-- `scripts/run_oracle.py`, `scripts/record.py`, `tests/test_env.py`.
+- `scripts/run_oracle.py`, `scripts/record.py`, `tests/test_env.py` (entorno, oráculo, callbacks) y `tests/test_cnn.py` (extractores CNN con los 4 algoritmos).
 - `scripts/train.py`: entrena PPO/A2C/DQN/QR-DQN con varias seeds, evalúa y graba GIFs. `scripts/evaluate.py`: re-evalúa modelos guardados. `scripts/record.py --model ... --algo PPO`: GIF de un modelo suelto.
 
 ## Uso
@@ -43,6 +44,9 @@ Instalación: `pip install -r requirements.txt` (instala Stable-Baselines3 y PyT
 ```bash
 # PPO y DQN, 3 seeds cada uno (observación `features` + MlpPolicy, recompensa por defecto)
 python scripts/train.py --algos ppo dqn --seeds 0 1 2 --timesteps 300000
+# lo mismo con CNN: observación `grid` (imagen 3x7x16) o `dict` (grilla + vector); el run queda como grid_fixed / dict_fixed
+python scripts/train.py --algos ppo dqn --obs grid --seeds 0 1 2 --timesteps 300000
+python scripts/train.py --algos ppo dqn --obs dict --seeds 0 1 2 --timesteps 300000
 # E1: comparación de algoritmos (PPO, A2C, DQN, QR-DQN), 3 seeds cada uno
 python scripts/train.py --algos ppo a2c dqn qrdqn --seeds 0 1 2 --timesteps 300000 --run-name e1_algoritmos
 # prueba rápida (~30 s) para chequear que todo corre
@@ -65,7 +69,7 @@ Cada agente deja en `runs/<run-name>/<algo>/seed<N>/` el modelo final, el mejor 
 - **Entrenamiento `--train-phase`**: `fixed` entrena siempre con x0=2.0 (mide cuánto generaliza a otras fases); `random` sortea x0 en cada episodio.
 - **Algoritmos** (`--algos`): `ppo`, `a2c`, `dqn`, `qrdqn`. PPO/A2C (on-policy) usan `--n-envs` entornos en paralelo; DQN/QR-DQN (off-policy, replay buffer) usan 1. QR-DQN viene de `sb3-contrib` (ya está en `requirements.txt`).
 - **Hiperparámetros** (`agents/common.py`): PPO `n_steps=256` × 8 entornos, red [64, 64], `ent_coef=0.01`; A2C `lr=7e-4`, `n_steps=16` × 8 entornos, `ent_coef=0.01`; DQN `lr=1e-3`, buffer 100k, ε 1→0.05 en el 30% del entrenamiento; QR-DQN igual que DQN con 50 cuantiles. Son un punto de partida, no están tuneados.
-- Sólo `obs_mode="features"` con `MlpPolicy` por ahora; `grid`/`dict` necesitan el extractor CNN propio (ver nota para SB3 más abajo).
+- **Observación** (`--obs`): `features` (vector + `MlpPolicy`, el baseline), `grid` (imagen 3×7×16 + CNN propia) o `dict` (grilla + vector). Detalle de la red en "Observaciones y CNN".
 - Penalización por salto, qué se guarda y continuar un entrenamiento: ver las secciones de abajo.
 - La recompensa se cambia pasando `reward_fn` en `make_train_env(..., reward_fn=...)` (`agents/common.py`) y en `evaluate_policy_phases(..., reward_fn=...)`.
 
@@ -107,7 +111,7 @@ runs/<run-name>/
 - **Checkpoints**: como `--checkpoint-freq` y `--eval-freq` coinciden, cada fila de `eval_history.csv` tiene su `checkpoints/model_<paso>_steps.zip`
   (el mejor es el de `best_model.json["timesteps"]`, que además se copia como `best_model.zip`). Así se conservan todos los modelos y queda claro cuál fue el mejor.
 - **Nunca se pisa una corrida**: si `runs/<run-name>/` ya existe, la nueva se guarda en `runs/<run-name>_<fecha-hora>/`.
-- Re-evaluar los mejores modelos: `python scripts/evaluate.py --run runs/<run-name> --best [--gif]`.
+- Re-evaluar los mejores modelos: `python scripts/evaluate.py --run runs/<run-name> --best [--gif]`. El tipo de observación (`features`/`grid`/`dict`) se lee del `config.json` de la corrida; para un `--model` suelto sin `config.json` hay que pasar `--obs`.
 
 ### Continuar entrenando un modelo ya entrenado (fine-tuning)
 `--init-model` carga un `.zip` (`model.zip`, `best_model.zip` o un checkpoint) y sigue entrenándolo en vez de empezar de cero:
@@ -131,6 +135,7 @@ from agents.common import load_model
 
 env = make_train_env("features", n_envs=8, seed=0, random_phase=False)   # random_phase=True sortea x0 en cada episodio
 model = build_model("ppo", env, seed=0)                                  # "ppo" | "a2c" | "dqn" | "qrdqn"
+# con CNN: make_train_env("grid", ...) + build_model("ppo", env, seed=0, obs_mode="grid")   ("dict" igual)
 model.learn(total_timesteps=300_000)
 model.save("modelos/ppo")
 
@@ -153,6 +158,26 @@ model.learn(200_000)
 ```
 Cada fila de `evaluate_policy_phases` tiene: `x0, success, progress, return, ticks, status, n_jumps, oracle_jumps, death_x`.
 
+## Observaciones y CNN
+`GeometryDashEnv(obs_mode=...)` ofrece tres observaciones; `build_model` elige la política de SB3 y el extractor de features según cuál se use:
+
+| `--obs` | Observación | Política SB3 | Extractor de features |
+|---|---|---|---|
+| `features` | vector `float32` de 28 números: `[y/H, vy/jump_v, en_suelo, frac(x)]` + por cada una de las 12 columnas siguientes `[altura/H, hay pincho]` | `MlpPolicy` | el de SB3 (aplanar) |
+| `grid` | imagen `uint8` de forma **(3, 7, 16)**, canales bloques / pinchos / jugador, ventana de 16 columnas desde el cubo | `CnnPolicy` | `GridCNN` |
+| `dict` | `{"grid": (3, 7, 16), "vec": (4,)}`; el vector trae `[y/H, vy/jump_v, en_suelo, frac(x)]` | `MultiInputPolicy` | `GridVecCNN` |
+
+**Por qué hay una CNN propia.** La `CnnPolicy` por defecto de SB3 usa `NatureCNN` (convoluciones de 8×8/stride 4, 4×4/stride 2 y 3×3), pensada para imágenes de Atari de al menos 36×36. La grilla de 7×16 es más chica y con esos strides no entra, así que `agents/cnn.py` define extractores a medida y `build_model` los pasa con `policy_kwargs`.
+
+**`GridCNN`** (observación `grid`): `Conv2d(3→32, 3×3, padding=1)` → ReLU → `Conv2d(32→64, 3×3, padding=1)` → ReLU → aplanar (64·7·16 = 7168) → `Linear(→128)` → ReLU. Con `padding=1` la grilla no se achica y no hay pooling ni strides: en una grilla tan chica cada celda importa (un pincho corrido una columna cambia el momento del salto). Después del extractor van las capas ocultas `[64, 64]` que ya usaban los demás modelos.
+
+**`GridVecCNN`** (observación `dict`): la grilla pasa por la misma CNN (128 features) y el vector `vec` por `Linear(4→32)` + ReLU; las dos salidas se concatenan (160 features). El vector aporta lo que la grilla sola no tiene: la **velocidad vertical** (si el cubo está subiendo o cayendo) y la fase dentro del tile.
+
+- Hiperparámetros de los algoritmos: los mismos que con `features` (cambia sólo el extractor). Cambiar el tamaño de la red: `policy_kwargs_for("grid", extra=dict(features_extractor_kwargs=dict(features_dim=64, channels=(16, 32))))` en `agents/common.py`.
+- Los modelos con CNN se guardan igual (`model.zip`) y se recargan con `load_model`; hace falta poder importar `agents.cnn`, o sea correr desde la raíz del repo.
+- Desde Python: `env = make_train_env("grid", n_envs=8, seed=0, random_phase=False)` y `model = build_model("ppo", env, seed=0, obs_mode="grid")` (con `"dict"` es igual). Evaluar: `evaluate_policy_phases(model, "grid")`.
+- Con CNN el entrenamiento es más lento que con `features` (más parámetros por paso); en CPU, DQN/QR-DQN son los más lentos.
+
 ## Decisiones de diseño
 - **Un tick = un paso**; velocidad horizontal constante (0.2 tiles/tick), así el nivel dura 520 pasos.
 - **Acción**: 0 = nada, 1 = saltar (sólo surte efecto apoyado; equivale a mantener apretado).
@@ -168,4 +193,4 @@ Como x depende sólo del tick, el espacio de estados es un DAG por capas; se rec
 Entre 3 y 10 según el obstáculo; los dobles pinchos (x≈23 y x≈65) son los más estrechos (3 ticks). Una política aleatoria no gana nunca (tests).
 
 ## Nota para SB3
-`CnnPolicy` por defecto (NatureCNN) exige imágenes de al menos 36×36; la grilla (7×16) es más chica. Opciones: extractor CNN propio con `policy_kwargs`, o `obs_mode="features"` con `MlpPolicy` como baseline.
+`CnnPolicy` por defecto (NatureCNN) exige imágenes de al menos 36×36; la grilla (7×16) es más chica. Por eso `grid` y `dict` usan los extractores de `agents/cnn.py` (ver "Observaciones y CNN"); `obs_mode="features"` con `MlpPolicy` queda como baseline.

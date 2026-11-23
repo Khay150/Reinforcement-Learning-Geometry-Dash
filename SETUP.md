@@ -37,13 +37,13 @@ Si el entorno quedó activo, el prompt muestra `(.venv)` al principio.
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
-Instala `gymnasium`, `numpy`, `pillow`, `pytest`, `stable-baselines3`, `sb3-contrib` (para QR-DQN) y `torch`.
+Instala `gymnasium`, `numpy`, `pillow`, `pytest`, `stable-baselines3`, `sb3-contrib` (para QR-DQN) y `torch` (también lo usa la CNN de `agents/cnn.py`).
 PyTorch pesa bastante (varios cientos de MB), puede tardar unos minutos. Alcanza con CPU; no hace falta GPU.
 
 ## 4. Chequear que todo funciona
 
 ```bash
-# a) tests del entorno (deberían pasar 17)
+# a) tests del entorno, los callbacks y la CNN (deberían pasar 40; tardan ~15 s)
 pytest tests
 
 # b) el oráculo resuelve el nivel y lo reproduce (debe terminar con status=win progreso=100%)
@@ -56,6 +56,12 @@ python scripts/run_oracle.py --ascii
 python scripts/train.py --algos ppo a2c dqn qrdqn --seeds 0 --timesteps 12000 --run-name humo --no-gif
 ```
 Si termina e imprime una tabla resumen, está todo bien. Deja resultados en `runs/humo/`.
+
+Lo mismo con las observaciones que usan CNN (`grid` y `dict`):
+```bash
+python scripts/train.py --algos ppo dqn --obs grid --seeds 0 --timesteps 12000 --run-name humo_grid --no-gif
+python scripts/train.py --algos ppo dqn --obs dict --seeds 0 --timesteps 12000 --run-name humo_dict --no-gif
+```
 
 ## 6. Entrenamiento real
 
@@ -78,9 +84,14 @@ python scripts/train.py --algos ppo --seeds 0 --timesteps 200000 --jump-penalty 
 
 # con fase de arranque aleatoria en cada episodio (mide generalización)
 python scripts/train.py --algos ppo dqn --train-phase random --run-name features_random
+
+# con CNN: observación "grid" (imagen 3x7x16) o "dict" (grilla + vector); el run queda como grid_fixed / dict_fixed
+python scripts/train.py --algos ppo dqn --obs grid --seeds 0 1 2 --timesteps 300000
+python scripts/train.py --algos ppo dqn --obs dict --seeds 0 1 2 --timesteps 300000
 ```
 Opciones útiles: `--algos ppo` (solo uno; valores posibles: `ppo`, `a2c`, `dqn`, `qrdqn`), `--seeds 0` (una seed),
 `--n-envs 8` (entornos en paralelo, solo PPO y A2C), `--jump-penalty 0.05` (penaliza cada salto efectivo),
+`--obs features|grid|dict` (tipo de observación: vector con MLP, o grilla / grilla + vector con CNN; ver el README),
 `--ramp` (la penalización sube gradualmente), `--init-model <zip>` (sigue entrenando un modelo),
 `--no-gif` (no graba GIFs), `--out runs` (carpeta de salida). Todas las opciones: `python scripts/train.py -h`.
 
@@ -101,7 +112,11 @@ python scripts/evaluate.py --run runs/features_fixed --best
 
 # un modelo suelto (--algo: ppo, a2c, dqn o qrdqn)
 python scripts/evaluate.py --model runs/features_fixed/ppo/seed0/model.zip --algo ppo
+
+# un modelo suelto entrenado con CNN, fuera de una carpeta de corrida (sin config.json): indicar --obs
+python scripts/evaluate.py --model modelos/ppo_grid.zip --algo ppo --obs grid
 ```
+Con `--run`, el tipo de observación (`features`/`grid`/`dict`) se lee del `config.json` de la corrida.
 
 ## 8. Grabar un GIF
 
@@ -111,6 +126,9 @@ python scripts/record.py --out videos/oraculo
 
 # de un modelo entrenado
 python scripts/record.py --model runs/features_fixed/ppo/seed0/model.zip --algo PPO --obs features --out videos/ppo
+
+# de un modelo con CNN: --obs tiene que ser el mismo con el que se entrenó (grid o dict)
+python scripts/record.py --model runs/grid_fixed/ppo/seed0/model.zip --algo PPO --obs grid --out videos/ppo_grid
 ```
 `--algo` acepta PPO, A2C, DQN y QRDQN.
 Genera `<out>.gif` y `<out>_recorrido.png`. Con `--x0 2.5` se cambia la fase de arranque (entre 2.0 y 2.95).
@@ -125,6 +143,8 @@ Genera `<out>.gif` y `<out>_recorrido.png`. Con `--x0 2.5` se cambia la fase de 
 | `No module named 'torch'` tras instalar | Reintentar `pip install torch`; chequear que sea Python 3.10+ de 64 bits. |
 | Entrenamiento muy lento | Bajar `--timesteps` o usar `--seeds 0` / `--algos ppo`. |
 | `QR-DQN requiere sb3-contrib` | `pip install sb3-contrib` (o repetir el paso 3 con `requirements.txt` actualizado). |
+| `ValueError` / error de forma al cargar o evaluar un modelo con CNN | El `--obs` no coincide con el del entrenamiento (un modelo `grid` no acepta `features` ni `dict`). Con `evaluate.py --run` se toma solo del `config.json`; con un modelo suelto hay que indicarlo. |
+| `ModuleNotFoundError: agents.cnn` al cargar un modelo con CNN | Correr desde la raíz del repo: el `.zip` guarda la clase del extractor y necesita poder importar `agents`. |
 | Usar Colab | `!git clone <url>`, `%cd Reinforcement-Learning-Geometry-Dash`, `!pip install -r requirements.txt` y luego los mismos comandos con `!`. |
 
 Más detalle del diseño del entorno, el oráculo y los hiperparámetros en el [README](README.md).

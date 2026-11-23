@@ -38,7 +38,7 @@ class PerformanceJumpPenaltyRamp(BaseCallback):
         """Registra un episodio terminado. Devuelve True si cambió ``c``."""
         self.results.append(float(success))
         if len(self.results) < self.results.maxlen:
-            return False
+            return False                      # todavía no hay una ventana completa de episodios para decidir
         self.last_rate = float(np.mean(self.results))
         old = self.c
         if self.last_rate >= self.up:
@@ -46,7 +46,7 @@ class PerformanceJumpPenaltyRamp(BaseCallback):
         elif self.last_rate <= self.down:
             self.c = max(self.c - self.step, 0.0)
         if self.c == old:
-            return False
+            return False                      # zona neutra o tope alcanzado: la ventana sigue deslizando
         self.results.clear()
         return True
 
@@ -58,10 +58,10 @@ class PerformanceJumpPenaltyRamp(BaseCallback):
             append_row({"timesteps": self.num_timesteps, "jump_penalty": round(self.c, 6),
                         "success_rate": success_rate}, self.log_path)
 
-    def _on_training_start(self):
+    def _on_training_start(self):                # hook de SB3: corre una vez al empezar ``model.learn``
         self._apply()                      # arranca con c = 0, sea cual sea el valor con que se creó el entorno
 
-    def _on_step(self) -> bool:
+    def _on_step(self) -> bool:                  # hook de SB3: corre después de cada paso de los entornos
         for info in self.locals["infos"]:
             if "episode" in info and self.observe(info["success"]):   # "episode" = terminó un episodio
                 self._apply(success_rate=round(self.last_rate, 3))
@@ -72,6 +72,7 @@ class PerformanceJumpPenaltyRamp(BaseCallback):
 def _score(m: dict) -> tuple:
     """Cuál modelo es mejor: más éxito, luego más progreso, luego menos saltos."""
     jumps = m["mean_jumps_won"]
+    # Tuplas se comparan en orden: primero éxito, después progreso, y por último menos saltos (de ahí el signo menos).
     return m["success"], m["progress"], -jumps if jumps is not None else -np.inf
 
 
@@ -86,12 +87,14 @@ class BestModelCallback(BaseCallback):
     def __init__(self, eval_freq: int, save_dir: str | Path, obs_mode: str = "features", phases=EVAL_PHASES,
                  **env_kwargs):
         super().__init__()
+        # eval_freq en pasos del entrenamiento; obs_mode debe coincidir con el del entorno de entrenamiento.
         self.eval_freq, self.save_dir, self.obs_mode, self.phases = eval_freq, Path(save_dir), obs_mode, phases
         self.env_kwargs = env_kwargs
         self.best_score = None
         self._last_eval = 0
 
     def _evaluate(self):
+        """Evalúa el modelo actual en las fases, lo registra en el historial y, si es el mejor hasta ahora, lo guarda."""
         self._last_eval = self.num_timesteps
         m = metrics(evaluate_policy_phases(self.model, self.obs_mode, self.phases, **self.env_kwargs))
         is_best = self.best_score is None or _score(m) > self.best_score

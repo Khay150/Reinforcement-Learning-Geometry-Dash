@@ -9,10 +9,11 @@ import numpy as np
 
 from .physics import BLOCK, EMPTY, SPIKE, Level
 
-_CHARS = {".": EMPTY, "#": BLOCK, "^": SPIKE}
+_CHARS = {".": EMPTY, "#": BLOCK, "^": SPIKE}      # carácter ASCII -> tipo de tile
 
 
 def parse_level(ascii_map: str, start_x: float = 2.0, goal_margin: int = 4, name: str = "ascii") -> Level:
+    """Arma un ``Level`` desde un dibujo ASCII. La meta queda ``goal_margin`` columnas antes del final del mapa."""
     rows = [r for r in ascii_map.strip("\n").splitlines()]
     width = max(len(r) for r in rows)
     grid = np.zeros((len(rows), width), dtype=np.uint8)
@@ -23,6 +24,7 @@ def parse_level(ascii_map: str, start_x: float = 2.0, goal_margin: int = 4, name
 
 
 def to_ascii(level: Level) -> str:
+    """Inversa de ``parse_level``: dibuja el nivel en texto (útil para imprimirlo o guardarlo)."""
     inv = {v: k for k, v in _CHARS.items()}
     return "\n".join("".join(inv[int(v)] for v in level.grid[r]) for r in range(level.height - 1, -1, -1))
 
@@ -31,13 +33,13 @@ def build_level(length: int, height: int, spikes=(), blocks=(), pits=(), name: s
     """spikes: columnas; blocks: (col, alto_en_tiles) con alto >=1 apilado desde el piso;
     pits: (col_inicio, ancho)."""
     g = np.zeros((height, length), dtype=np.uint8)
-    g[0, :] = BLOCK
+    g[0, :] = BLOCK                       # piso continuo...
     for c, w in pits:
-        g[0, c:c + w] = EMPTY
+        g[0, c:c + w] = EMPTY             # ...con pozos donde se indica
     for c, h in blocks:
-        g[1:1 + h, c] = BLOCK
+        g[1:1 + h, c] = BLOCK             # columnas de bloques apiladas sobre el piso
     for c in spikes:
-        g[1, c] = SPIKE
+        g[1, c] = SPIKE                   # pinchos apoyados sobre el piso
     return Level(g, goal_x=length - 4, start_x=2.0, name=name)
 
 

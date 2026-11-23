@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))     # raíz del repo en el path: así se importan gd_env y agents
 
 from gd_env import GeometryDashEnv, OraclePolicy, record_episode
 
@@ -21,9 +21,9 @@ def main():
     ap.add_argument("--frame-skip", type=int, default=2)
     a = ap.parse_args()
 
-    env = GeometryDashEnv(obs_mode=a.obs)
+    env = GeometryDashEnv(obs_mode=a.obs)       # --obs debe ser el mismo con el que se entrenó el modelo
     if a.model:
-        from agents.common import load_model
+        from agents.common import load_model     # import tardío: no hace falta torch/SB3 si sólo se graba el oráculo
         policy = load_model(a.algo, a.model)
     else:
         policy = OraclePolicy(env)
