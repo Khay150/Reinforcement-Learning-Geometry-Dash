@@ -1,5 +1,6 @@
 from gymnasium.envs.registration import register
 
+from .difficulty import Difficulty, JumpInfo, difficulty_over_phases, level_difficulty
 from .env import GeometryDashEnv
 from .levels import LEVELS, build_level, get_level, level_1, parse_level, resolve_levels, to_ascii
 from .oracle import Oracle, OraclePolicy, solve
@@ -13,4 +14,5 @@ __all__ = ["GeometryDashEnv", "Level", "Physics", "LEVELS", "level_1", "get_leve
            "build_level", "parse_level",
            "to_ascii", "solve", "Oracle", "OraclePolicy",
            "Transition", "default_reward", "load_reward_fn", "reward_spec",
-           "record_episode", "render_frame", "trajectory_image"]
+           "record_episode", "render_frame", "trajectory_image",
+           "Difficulty", "JumpInfo", "level_difficulty", "difficulty_over_phases"]

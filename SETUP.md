@@ -43,7 +43,7 @@ PyTorch pesa bastante (varios cientos de MB), puede tardar unos minutos. Alcanza
 ## 4. Chequear que todo funciona
 
 ```bash
-# a) tests del entorno, los callbacks y la CNN (deberían pasar 45 y saltearse 3 si no está sb3-contrib; tardan ~45 s)
+# a) tests del entorno, los callbacks, la CNN y la dificultad (deberían pasar 59, o 56 y saltearse 3 si no está sb3-contrib; tardan ~1 min)
 pytest tests
 
 # b) el oráculo resuelve el nivel y lo reproduce (debe terminar con status=win progreso=100%)
