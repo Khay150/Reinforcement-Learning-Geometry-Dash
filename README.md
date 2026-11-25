@@ -6,13 +6,14 @@
 - `gd_env/env.py`: `GeometryDashEnv` (Gymnasium), registrado como `GeometryDash-v0`.
 - `gd_env/oracle.py`: planificador exacto (programación dinámica por capas de tick) + `OraclePolicy`.
 - `gd_env/render.py`: frames, GIF del episodio y mapa del recorrido (`record_episode`).
+- `gd_env/difficulty.py`: dificultad de un nivel medida con la física, sin entrenar (`level_difficulty`): precisión de cada salto, trampas, saltos encadenados y probabilidad de ganar al azar. Ver "Dificultad de un nivel".
 - `agents/__init__.py`: expone la API de agentes (`make_train_env`, `build_model`, `evaluate_policy_phases`, `summarize`, `EVAL_PHASES`, `TRAIN_PHASE_RANGE`).
 - `agents/common.py`: `make_train_env` (con/sin fase aleatoria vía el wrapper `RandomPhase`), `build_model` (PPO/A2C/DQN/QR-DQN con hiperparámetros iniciales; elige MLP o CNN según `obs_mode`), `policy_for` / `policy_kwargs_for`, `load_model` y `load_for_training` (seguir entrenando un modelo).
 - `agents/cnn.py`: extractores CNN propios para SB3: `GridCNN` (observación `grid`) y `GridVecCNN` (observación `dict`: CNN para la grilla + capa lineal para el vector). Ver "Observaciones y CNN".
 - `agents/callbacks.py`: callbacks de SB3: `PerformanceJumpPenaltyRamp` (rampa de la penalización por salto) y `BestModelCallback` (evalúa periódicamente y guarda el mejor modelo).
 - `agents/evaluate.py`: `evaluate_policy_phases` (un episodio determinista por fase), `metrics`/`describe`, `save_rows`/`append_row` (CSV) y `summarize` (tabla markdown entre seeds).
 - `agents/runs.py`: `evaluate_and_record` (evalúa un modelo y deja su CSV y GIFs), compartido por `train.py` y `evaluate.py`.
-- `scripts/run_oracle.py`, `scripts/record.py`, `tests/test_env.py` (entorno, oráculo, callbacks) y `tests/test_cnn.py` (extractores CNN con los 4 algoritmos).
+- `scripts/run_oracle.py`, `scripts/record.py`, `scripts/difficulty.py` (tabla de dificultad de los niveles), `tests/test_env.py` (entorno, oráculo, callbacks), `tests/test_cnn.py` (extractores CNN con los 4 algoritmos) y `tests/test_difficulty.py`.
 - `scripts/train.py`: entrena PPO/A2C/DQN/QR-DQN con varias seeds, evalúa y graba GIFs. `scripts/evaluate.py`: re-evalúa modelos guardados. `scripts/record.py --model ... --algo PPO`: GIF de un modelo suelto.
 
 ## Uso
@@ -267,8 +268,42 @@ Cada fila de `evaluate_policy_phases` tiene: `level, x0, success, progress, retu
 ## Oráculo
 Como x depende sólo del tick, el espacio de estados es un DAG por capas; se recorre con DP guardando los saltos mínimos. Devuelve el plan con **menos saltos** (13 en el nivel 1, jugable en 520 ticks, retorno 2.0). `plan.jump_x` da dónde saltar (útil para el timing reward), y `Oracle.is_winnable(state)` indica si un estado todavía es salvable.
 
-## Dificultad medida (ticks de despegue válidos por salto)
-Entre 3 y 10 según el obstáculo; los dobles pinchos (x≈23 y x≈65) son los más estrechos (3 ticks). Una política aleatoria no gana nunca (tests).
+## Dificultad de un nivel
+`scripts/difficulty.py` mide, con la física y sin entrenar, lo que acordamos como dificultad: **qué tan preciso tiene que ser
+cada salto** y **cuántos saltos hay que encadenar**. Sirve para clasificar los niveles en fácil / medio / difícil con un criterio
+común (y justificarlo en el informe), y para probar un nivel nuevo antes de entrenar con él.
+```bash
+python scripts/difficulty.py                          # todos los niveles registrados en gd_env.LEVELS
+python scripts/difficulty.py level_1 --detalle        # + tabla salto por salto
+python scripts/difficulty.py mi_nivel.txt --ascii     # un nivel dibujado en ASCII (sin registrarlo todavía)
+python scripts/difficulty.py niveles/ejemplo.json     # los niveles de un .json (entrenamiento y validación)
+```
+```python
+from gd_env import get_level, level_difficulty
+d = level_difficulty(get_level("level_1"))      # d.summary() = la fila de la tabla; d.jumps = detalle por salto
+```
+**Cómo se calcula.** Como el oráculo, enumera todos los estados alcanzables (~6.500 en `level_1`, 0.1 s) y, de atrás para
+adelante, calcula para cada uno los saltos mínimos para ganar y la probabilidad de ganar apretando al azar. Después recorre un
+camino óptimo salto por salto (despegando en el centro de cada ventana) y mide:
+
+| Columna | Qué mide |
+|---|---|
+| saltos mínimos | los mismos que el oráculo |
+| ventana mín. / media (ticks) | cuántos ticks de despegue distintos siguen ganando **sin gastar saltos de más** (1 tick = 0.2 tiles). La mínima es el salto más preciso del nivel |
+| saltos con trampas / ticks trampa | despegues desde los que el cubo aterriza vivo pero el nivel ya no se puede ganar: el error se paga después ("el primer salto determina los siguientes") |
+| cadena más larga / saltos encadenados | dos saltos seguidos están encadenados si cuándo despegás en el primero (dentro de su ventana) cambia la ventana del segundo |
+| log10 P(ganar al azar) | probabilidad de ganar apretando 50/50 en cada tick: cuánto le cuesta a un agente dar con la solución explorando (−3 = uno de cada mil episodios) |
+| fases con solución | de cuántas fases de arranque se puede ganar |
+
+Cada columna es el **peor caso** entre las 10 fases de arranque de la evaluación (`--fases 1`: sólo x0 = 2.0). Con `--detalle`, por
+cada salto: dónde está la ventana, cuántas trampas tiene y, si está encadenado, entre cuánto y cuánto varía la ventana del siguiente.
+Funciona con cualquier nivel dibujable en ASCII, también con techos o plataformas flotantes (la física ya resuelve los cabezazos).
+
+**`level_1`**: 13 saltos; ventanas de 2 a 10 ticks (media 6.3). Las más chicas: el salto desde la plataforma baja al pozo (x≈78,
+2 ticks) y los pinchos dobles (x≈23 y x≈65, 3 ticks). Tiene 3 saltos con trampas (escalón x≈31, escalera x≈49, plataforma baja
+x≈73), una cadena de 3 saltos (pozo → escalera, x≈45–52) y P(ganar al azar) ≈ 10^-4.6 en x0 = 2.0 (uno de cada ~40.000 episodios:
+por eso la política aleatoria de los tests no gana nunca). Los cortes entre fácil / medio / difícil los tenemos que acordar;
+`level_1` sirve de referencia.
 
 ## Nota para SB3
 `CnnPolicy` por defecto (NatureCNN) exige imágenes de al menos 36×36; la grilla (7×16) es más chica. Por eso `grid` y `dict` usan los extractores de `agents/cnn.py` (ver "Observaciones y CNN"); `obs_mode="features"` con `MlpPolicy` queda como baseline.
