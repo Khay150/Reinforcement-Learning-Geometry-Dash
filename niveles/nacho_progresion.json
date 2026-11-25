@@ -1,0 +1,16 @@
+{
+  "_nota": [
+    "Los 4 niveles de nacho introducidos de a poco (progresion) y validacion contra level_1 (held out).",
+    "etapas: se arranca sólo con la primera; la siguiente se desbloquea cuando todos los niveles activos ganan",
+    ">= 'desbloquear' de sus últimos 'ventana' episodios de entrenamiento. Los niveles activos se juegan más cuanto",
+    "más fallan, y nunca menos que 'piso' (así se siguen repasando). Ver agents/callbacks.py: LevelProgression."
+  ],
+  "niveles": ["nacho_facil", "nacho_medio", "nacho_dificil", "nacho_muy_dificil"],
+  "validacion": "level_1",
+  "progresion": {
+    "etapas": [["nacho_facil"], ["nacho_medio"], ["nacho_dificil", "nacho_muy_dificil"]],
+    "desbloquear": 0.8,
+    "ventana": 50,
+    "piso": 0.2
+  }
+}

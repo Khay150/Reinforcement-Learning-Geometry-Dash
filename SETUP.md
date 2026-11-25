@@ -43,7 +43,7 @@ PyTorch pesa bastante (varios cientos de MB), puede tardar unos minutos. Alcanza
 ## 4. Chequear que todo funciona
 
 ```bash
-# a) tests del entorno, los callbacks y la CNN (deberían pasar 45 y saltearse 3 si no está sb3-contrib; tardan ~45 s)
+# a) tests del entorno, los callbacks y la CNN (deberían pasar 48 y saltearse 3 si no está sb3-contrib; tardan ~50 s)
 pytest tests
 
 # b) el oráculo resuelve el nivel y lo reproduce (debe terminar con status=win progreso=100%)
@@ -97,6 +97,8 @@ python scripts/train.py --algos ppo dqn --obs dict --seeds 0 1 2 --timesteps 300
 
 # varios niveles: un .json con los niveles de entrenamiento (con peso) y los de validación (held out)
 python scripts/train.py --algos ppo --levels niveles/ejemplo.json
+# progresión: los niveles se introducen de a poco, por etapas (ver "Progresión de niveles" en el README)
+python scripts/train.py --algos ppo --obs grid --levels niveles/nacho_progresion.json
 ```
 Opciones útiles: `--algos ppo` (solo uno; valores posibles: `ppo`, `a2c`, `dqn`, `qrdqn`), `--seeds 0` (una seed),
 `--n-envs 8` (entornos en paralelo, solo PPO y A2C), `--jump-penalty 0.05` (penaliza cada salto efectivo),

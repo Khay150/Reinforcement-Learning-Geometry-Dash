@@ -7,7 +7,11 @@ Para entrenar con varios niveles, ``resolve_levels`` traduce lo que se pasa a ``
 y/o un archivo ``.json``) en los niveles de entrenamiento con su peso y los de validación. Formato del ``.json``::
 
     {"niveles": {"level_1": 1.0, "level_2": 2.0},     # o una lista de nombres (todos con peso 1)
-     "validacion": ["level_3"]}                        # nombre(s), un número (cuántos sortear) o null
+     "validacion": ["level_3"],                        # nombre(s), un número (cuántos sortear) o null
+     "progresion": {"etapas": [["level_1"], ["level_2"]],   # opcional: introducir los niveles de a poco
+                    "desbloquear": 0.8, "ventana": 50, "piso": 0.2}}
+
+La ``progresion`` (en la literatura, *curriculum learning*) la ejecuta ``agents.callbacks.LevelProgression``.
 """
 from __future__ import annotations
 
@@ -151,6 +155,29 @@ def read_level_file(path: str | Path) -> tuple[dict[str, float], object]:
     return {k: float(v) for k, v in levels.items()}, data.get("validacion")
 
 
+# Valores por defecto de la progresión (los que no se escriben en el .json).
+PROGRESSION_DEFAULTS = {"desbloquear": 0.8, "ventana": 50, "piso": 0.2}
+
+
+def _check_progression(prog: dict, train: dict[str, float], val_names: list[str]) -> dict:
+    """Valida el bloque ``progresion`` contra los niveles de entrenamiento y completa los valores por defecto.
+    Los niveles que quedaron para validación se sacan de las etapas (y las etapas vacías se descartan)."""
+    unknown = set(prog) - {"etapas", *PROGRESSION_DEFAULTS} - {k for k in prog if k.startswith("_")}
+    if unknown:
+        raise ValueError(f"progresion: claves desconocidas {sorted(unknown)}")
+    stages = [[n for n in stage if n not in val_names] for stage in prog["etapas"]]
+    stages = [stage for stage in stages if stage]
+    listed = [n for stage in stages for n in stage]
+    if sorted(listed) != sorted(train) or len(set(listed)) != len(listed):
+        raise ValueError(f"progresion: cada nivel de entrenamiento tiene que estar en exactamente una etapa "
+                         f"(niveles: {sorted(train)}; en las etapas: {listed})")
+    out = {"etapas": stages, **PROGRESSION_DEFAULTS, **{k: prog[k] for k in PROGRESSION_DEFAULTS if k in prog}}
+    if not 0 < out["desbloquear"] <= 1 or not 0 < out["piso"] <= 1 or int(out["ventana"]) < 1:
+        raise ValueError("progresion: desbloquear y piso tienen que estar en (0, 1] y ventana >= 1")
+    out["ventana"] = int(out["ventana"])
+    return out
+
+
 def resolve_levels(spec: list[str] | str | None, val_seed: int = 0) -> dict:
     """Resuelve ``--levels`` en niveles de entrenamiento (con peso) y de validación.
 
@@ -159,11 +186,12 @@ def resolve_levels(spec: list[str] | str | None, val_seed: int = 0) -> dict:
       * nombre o lista de nombres -> esos niveles quedan fuera del entrenamiento (held out);
       * un número n               -> se sortean n niveles de entrenamiento y se sacan del entrenamiento;
       * null (o sin .json)        -> no se reserva ninguno: se valida en uno de entrenamiento elegido al azar.
+    ``progresion`` (opcional, de un .json): etapas para introducir los niveles de a poco (ver ``_check_progression``).
     El sorteo usa ``val_seed``, así es reproducible. Devuelve
-    ``{"train": {nombre: peso}, "val": [nombres], "held_out": bool}``.
+    ``{"train": {nombre: peso}, "val": [nombres], "held_out": bool, "progression": dict | None}``.
     """
     spec = ["level_1"] if not spec else [spec] if isinstance(spec, str) else list(spec)
-    train, val = {}, None
+    train, val, prog = {}, None, None
     for item in spec:
         if item.endswith(".json"):
             weights, v = read_level_file(item)
@@ -172,6 +200,11 @@ def resolve_levels(spec: list[str] | str | None, val_seed: int = 0) -> dict:
                 if val is not None:
                     raise ValueError("más de un .json define 'validacion'")
                 val = v
+            p = json.loads(Path(item).read_text()).get("progresion")
+            if p is not None:
+                if prog is not None:
+                    raise ValueError("más de un .json define 'progresion'")
+                prog = p
         else:
             train[item] = 1.0
     rng = np.random.default_rng(val_seed)
@@ -189,4 +222,6 @@ def resolve_levels(spec: list[str] | str | None, val_seed: int = 0) -> dict:
         get_level(name)                                   # falla ya si algún nombre no existe
     if not train or sum(train.values()) <= 0:
         raise ValueError("no quedan niveles de entrenamiento con peso > 0")
-    return {"train": train, "val": val_names, "held_out": held_out}
+    if prog is not None:
+        prog = _check_progression(prog, train, val_names)
+    return {"train": train, "val": val_names, "held_out": held_out, "progression": prog}

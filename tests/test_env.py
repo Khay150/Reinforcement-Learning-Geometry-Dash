@@ -388,7 +388,8 @@ def test_oracle_policy_follows_level_changes():
 def test_resolve_levels(registered_minis, tmp_path):
     import json
     from gd_env import resolve_levels
-    assert resolve_levels(None) == {"train": {"level_1": 1.0}, "val": ["level_1"], "held_out": False}
+    assert resolve_levels(None) == {"train": {"level_1": 1.0}, "val": ["level_1"], "held_out": False,
+                                    "progression": None}
     names = resolve_levels(["level_1", "mini_a"], val_seed=0)            # nombres sueltos: validación null
     assert names["train"] == {"level_1": 1.0, "mini_a": 1.0} and not names["held_out"]
     assert names["val"][0] in names["train"]
@@ -399,7 +400,8 @@ def test_resolve_levels(registered_minis, tmp_path):
         return str(f)
 
     fixed = resolve_levels([spec({"level_1": 1, "mini_a": 2, "mini_b": 1}, "mini_b")])
-    assert fixed == {"train": {"level_1": 1.0, "mini_a": 2.0}, "val": ["mini_b"], "held_out": True}
+    assert fixed == {"train": {"level_1": 1.0, "mini_a": 2.0}, "val": ["mini_b"], "held_out": True,
+                     "progression": None}
     lst = resolve_levels([spec(["level_1", "mini_a"], ["mini_b"])])
     assert lst["train"] == {"level_1": 1.0, "mini_a": 1.0} and lst["val"] == ["mini_b"]
     drawn = [resolve_levels([spec(["level_1", "mini_a", "mini_b"], 1)], val_seed=s) for s in (0, 0, 1, 2, 3)]
@@ -438,3 +440,63 @@ def test_evaluate_and_history_with_validation(registered_minis, tmp_path):
     model.learn(total_timesteps=512, callback=cb)
     header = (tmp_path / "eval_history.csv").read_text().splitlines()[0].split(",")
     assert {"success", "val_success", "val_progress", "val_mean_jumps_won", "is_best"} <= set(header)
+    assert {"success_mini_a", "success_level_1", "val_success_mini_b"} <= set(header)     # éxito por nivel
+
+
+# ------------------------------------------------------------------ progresión de niveles
+def test_progression_in_level_file(registered_minis, tmp_path):
+    import json
+    from gd_env import resolve_levels
+
+    def spec(**data):
+        f = tmp_path / f"p{len(list(tmp_path.iterdir()))}.json"
+        f.write_text(json.dumps(data))
+        return str(f)
+
+    out = resolve_levels([spec(niveles=["level_1", "mini_a", "mini_b"], validacion="mini_b",
+                               progresion={"etapas": [["level_1"], ["mini_a", "mini_b"]], "ventana": 10})])
+    # mini_b es de validación: sale de su etapa; los valores que faltan toman el valor por defecto
+    assert out["progression"] == {"etapas": [["level_1"], ["mini_a"]], "desbloquear": 0.8, "ventana": 10, "piso": 0.2}
+    with pytest.raises(ValueError):            # un nivel de entrenamiento sin etapa
+        resolve_levels([spec(niveles=["level_1", "mini_a"], progresion={"etapas": [["level_1"]]})])
+    with pytest.raises(ValueError):            # un nivel en dos etapas
+        resolve_levels([spec(niveles=["level_1", "mini_a"], progresion={"etapas": [["level_1", "mini_a"], ["mini_a"]]})])
+    with pytest.raises(ValueError):            # clave mal escrita
+        resolve_levels([spec(niveles=["level_1"], progresion={"etapas": [["level_1"]], "piso_": 0.1})])
+
+
+def test_level_progression_logic():
+    """Desbloqueo por etapas, piso, peso máximo para niveles sin datos y recuperación de un nivel olvidado."""
+    from agents.callbacks import LevelProgression
+    p = LevelProgression(["a", "b", "c"], [1.0, 1.0, 2.0], [["a"], ["b", "c"]], unlock=0.75, window=4, floor=0.2)
+    assert p.weights() == [1.0, 0.0, 0.0]                         # sólo la primera etapa; sin datos = peso máximo
+    assert not any(p.observe("a", True) for _ in range(3))        # ventana incompleta: no decide
+    assert p.weights() == [pytest.approx(0.2), 0.0, 0.0]          # domina "a": baja al piso, nunca a 0
+    assert p.observe("a", False) and p.stage == 1                 # 3/4 = 0.75 >= unlock: se desbloquea la etapa 2
+    assert p.weights() == [pytest.approx(0.25), 1.0, 2.0]         # nuevos sin datos: peso máximo (x peso base)
+    for _ in range(4):
+        p.observe("b", True)
+        p.observe("c", True)
+    assert p.stage == 1                                           # última etapa: no hay más que desbloquear
+    for _ in range(4):
+        p.observe("a", False)                                     # olvida "a"...
+    assert p.weights()[0] == pytest.approx(1.0)                   # ...y su peso vuelve al máximo
+    assert p.weights()[1:] == [pytest.approx(0.2), pytest.approx(0.4)]
+
+
+def test_level_progression_reaches_inner_env(tmp_path):
+    """Integrado con SB3: los pesos llegan al entorno de adentro y la columna 'level' queda en monitor/."""
+    from agents import build_model, make_train_env
+    from agents.callbacks import LevelProgression
+    a, b = mini_levels()
+    prog = LevelProgression(["mini_a", "mini_b"], [1.0, 1.0], [["mini_a"], ["mini_b"]], window=2,
+                            log_path=tmp_path / "progresion.csv")
+    venv = make_train_env("features", n_envs=2, seed=0, random_phase=False, monitor_dir=str(tmp_path / "mon"),
+                          level=[a, b], level_weights=prog.weights())
+    model = build_model("ppo", venv, seed=0)
+    model.learn(total_timesteps=512, callback=prog)
+    assert [e.unwrapped.level_weights for e in venv.envs] == [prog.weights()] * 2
+    assert prog.weights()[1] == 0.0                               # sin entrenar no gana: mini_b sigue bloqueado
+    assert "level" in (tmp_path / "mon" / "0.monitor.csv").read_text().splitlines()[1]
+    assert {"mini_b"} != {l.split(",")[-1] for l in (tmp_path / "mon" / "0.monitor.csv").read_text().splitlines()[2:]}
+    assert (tmp_path / "progresion.csv").read_text().startswith("timesteps,event,stage,w_mini_a,w_mini_b")

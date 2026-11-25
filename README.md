@@ -162,10 +162,33 @@ python scripts/train.py --algos ppo --levels level_1 level_2           # nombres
   con prefijo `val_`. `resumen.md` trae tablas de entrenamiento y de validación.
 - **Historial de validación**: las evaluaciones periódicas también miden los niveles de validación (columnas `val_success`,
   `val_progress`, `val_mean_jumps_won` de `eval_history.csv`), pero el **mejor modelo se elige sólo con los de entrenamiento**.
+  Además hay una columna de éxito por nivel (`success_<nivel>`, `val_success_<nivel>`): sirve para ver si olvida alguno.
+  `monitor/*.csv` registra en la columna `level` qué nivel se jugó en cada episodio de entrenamiento.
 - `config.json` guarda lo pedido (`levels`, `val_seed`) y lo que resultó (`train_levels` con pesos, `val_levels`, `val_held_out`);
   `scripts/evaluate.py` lo usa para re-evaluar con los mismos niveles. Las corridas viejas (sin niveles) siguen funcionando con `level_1`.
 - Los pesos se pueden cambiar durante el entrenamiento (`env_method("set_wrapper_attr", "level_weights", [...])`), igual que la
-  penalización por salto: es la base para una futura rampa que agregue niveles más difíciles de a poco.
+  penalización por salto: es lo que usa la progresión de niveles (abajo).
+
+#### Progresión de niveles (introducirlos de a poco)
+Opcional, en el mismo `.json` (en la literatura se llama *curriculum learning*). Ejemplo: `niveles/nacho_progresion.json`.
+```json
+{"niveles": ["nacho_facil", "nacho_medio", "nacho_dificil", "nacho_muy_dificil"],
+ "validacion": "level_1",
+ "progresion": {"etapas": [["nacho_facil"], ["nacho_medio"], ["nacho_dificil", "nacho_muy_dificil"]],
+                "desbloquear": 0.8, "ventana": 50, "piso": 0.2}}
+```
+- **`etapas`**: cualquier cantidad, cada una con uno o más niveles; cada nivel de entrenamiento tiene que estar en exactamente una.
+  Se arranca sólo con la primera; las demás tienen peso 0 hasta desbloquearse.
+- **Desbloqueo**: cuando **todos** los niveles activos ganan al menos `desbloquear` (80%) de sus últimos `ventana` (50) episodios
+  de entrenamiento, se suma la etapa siguiente.
+- **Pesos según el desempeño**: cada nivel activo pesa `peso_base × max(piso, 1 − éxito_reciente)`. Se practica más lo que más falla;
+  un nivel recién desbloqueado entra con el peso máximo; uno dominado baja hasta `piso` pero nunca a 0, así se sigue repasando, y si el
+  agente lo olvida su peso vuelve a subir solo (evita el *olvido catastrófico*). Los pesos de `niveles` multiplican a este peso.
+- `desbloquear`, `ventana` y `piso` son opcionales (valores por defecto los de arriba). Si `validacion` saca un nivel que estaba en una
+  etapa, se lo quita de ella. El callback es `LevelProgression` (`agents/callbacks.py`); cada cambio de etapa (y, cada `ventana`
+  episodios, los pesos y el éxito por nivel) queda en `progresion.csv`. El nombre de la corrida suma `_prog`.
+- Con `--init-model` la progresión vuelve a empezar desde la primera etapa. Combinada con `--ramp`, cada nivel nuevo baja la tasa de
+  éxito y la rampa puede aflojar `c` un rato.
 
 ### Qué se guarda
 ```
@@ -180,6 +203,7 @@ runs/<run-name>/
     ├── eval_fases.csv       evaluación del modelo final  ·  eval_fases_best.csv  del mejor modelo  ·  *_val.csv: en los niveles de validación
     ├── monitor/             un CSV por entorno con cada episodio de entrenamiento
     ├── jump_penalty.csv     evolución de c (sólo con --ramp)
+    ├── progresion.csv       etapas, pesos y éxito por nivel (sólo con "progresion" en el .json de niveles)
     └── episodio_<nivel>_x0_*.gif, *_recorrido.png  (final)  ·  mejor_episodio_*  (mejor)  ·  val_*  (niveles de validación)
 ```
 - **Mejor modelo**: cada `--eval-freq` pasos (25k; `0` lo desactiva) y al terminar se evalúa el modelo de forma determinista en las
