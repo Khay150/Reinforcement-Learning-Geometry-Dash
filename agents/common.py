@@ -38,12 +38,12 @@ def make_train_env(obs_mode: str, n_envs: int, seed: int, random_phase: bool, mo
     """VecEnv de entrenamiento. ``random_phase=False`` entrena siempre con x0 = 2.0 (nivel fijo).
     ``env_kwargs`` va directo a ``GeometryDashEnv`` (p. ej. ``jump_penalty``, ``death_penalty``, ``reward_fn``)."""
     # make_vec_env crea ``n_envs`` copias del entorno (cada una envuelta en un Monitor que registra los episodios).
-    # ``info_keywords`` agrega "success" y "progress" a las columnas de los CSV de monitor/ (y a ``info["episode"]``).
+    # ``info_keywords`` agrega "success", "progress" y "level" a las columnas de los CSV de monitor/.
     return make_vec_env(
         GeometryDashEnv, n_envs=n_envs, seed=seed, monitor_dir=monitor_dir,
         env_kwargs={"obs_mode": obs_mode, **env_kwargs},
         wrapper_class=RandomPhase if random_phase else None,
-        monitor_kwargs={"info_keywords": ("success", "progress")},
+        monitor_kwargs={"info_keywords": ("success", "progress", "level")},
     )
 
 

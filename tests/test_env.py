@@ -205,6 +205,48 @@ def test_reward_params_default_and_custom():
     assert ret == pytest.approx(1.0 + 5.0)     # progreso (1) + bonus de meta
 
 
+def test_survive_bonus_every_interval():
+    """survive_bonus se da cada survive_interval ticks vivo; el tick en que muere no lo cobra."""
+    pol = lambda o, e: 0                       # nunca salta: choca
+    def total(**kw):
+        env = GeometryDashEnv(obs_mode="features", progress_scale=0.0, death_penalty=0.0, **kw)
+        env.reset()
+        ticks, tot = 0, 0.0
+        while True:
+            _, r, term, trunc, _ = env.step(0)
+            ticks += 1; tot += r
+            if term or trunc:
+                return ticks, tot
+    n, base = total()
+    assert base == pytest.approx(0.0)
+    n1, every = total(survive_bonus=0.5)                       # cada tick vivo (el último, el de la muerte, no cuenta)
+    assert every == pytest.approx(0.5 * (n1 - 1))
+    n2, spaced = total(survive_bonus=0.5, survive_interval=5)
+    assert spaced == pytest.approx(0.5 * ((n2 - 1) // 5))
+
+
+def test_survive_rate_follows_jump_penalty():
+    """survive_rate: bonus por tick = rate * jump_penalty vigente (cambia si la rampa cambia jump_penalty)."""
+    def total(c):
+        env = GeometryDashEnv(obs_mode="features", progress_scale=0.0, death_penalty=0.0,
+                              jump_penalty=0.0, survive_rate=0.5, survive_interval=5)
+        env.reset(); env.jump_penalty = c           # la rampa cambia jump_penalty durante el entrenamiento
+        tot, n = 0.0, 0
+        while True:
+            _, r, term, trunc, _ = env.step(0)      # nunca salta: no paga saltos
+            tot += r; n += 1
+            if term or trunc:
+                return tot, n
+    t0, _ = total(0.0)
+    t1, n1 = total(0.1)
+    t2, n2 = total(0.2)
+    assert t0 == pytest.approx(0.0)
+    assert t1 == pytest.approx(0.5 * 0.1 * 5 * ((n1 - 1) // 5))
+    assert t2 == pytest.approx(2 * t1) and n1 == n2
+    with pytest.raises(ValueError):
+        GeometryDashEnv(survive_rate=0.1, survive_bonus=0.1)
+
+
 def test_reward_fn_new_and_legacy_signature():
     """reward_fn(tr) y la firma vieja (prev, new, status, level) dan lo mismo; jump_penalty se suma encima."""
     from gd_env import Transition, default_reward
@@ -355,7 +397,7 @@ def test_all_registered_levels_solvable_from_eval_phases():
         lv = gd_env.get_level(name)
         assert lv.height == level_1().height and lv.start_x == 2.0, name
         for x0 in EVAL_PHASES:
-            assert oracle_jumps(lv, x0) > 0, f"{name} sin solución desde x0={x0}"
+            assert oracle_jumps(lv, x0) >= 0, f"{name} sin solución desde x0={x0}"    # -1 = sin solución (0 saltos vale: franco_sin_saltar)
 
 
 def test_env_samples_levels_by_weight():
@@ -388,7 +430,8 @@ def test_oracle_policy_follows_level_changes():
 def test_resolve_levels(registered_minis, tmp_path):
     import json
     from gd_env import resolve_levels
-    assert resolve_levels(None) == {"train": {"level_1": 1.0}, "val": ["level_1"], "held_out": False}
+    assert resolve_levels(None) == {"train": {"level_1": 1.0}, "val": ["level_1"], "held_out": False,
+                                    "progression": None}
     names = resolve_levels(["level_1", "mini_a"], val_seed=0)            # nombres sueltos: validación null
     assert names["train"] == {"level_1": 1.0, "mini_a": 1.0} and not names["held_out"]
     assert names["val"][0] in names["train"]
@@ -399,7 +442,8 @@ def test_resolve_levels(registered_minis, tmp_path):
         return str(f)
 
     fixed = resolve_levels([spec({"level_1": 1, "mini_a": 2, "mini_b": 1}, "mini_b")])
-    assert fixed == {"train": {"level_1": 1.0, "mini_a": 2.0}, "val": ["mini_b"], "held_out": True}
+    assert fixed == {"train": {"level_1": 1.0, "mini_a": 2.0}, "val": ["mini_b"], "held_out": True,
+                     "progression": None}
     lst = resolve_levels([spec(["level_1", "mini_a"], ["mini_b"])])
     assert lst["train"] == {"level_1": 1.0, "mini_a": 1.0} and lst["val"] == ["mini_b"]
     drawn = [resolve_levels([spec(["level_1", "mini_a", "mini_b"], 1)], val_seed=s) for s in (0, 0, 1, 2, 3)]
@@ -438,3 +482,189 @@ def test_evaluate_and_history_with_validation(registered_minis, tmp_path):
     model.learn(total_timesteps=512, callback=cb)
     header = (tmp_path / "eval_history.csv").read_text().splitlines()[0].split(",")
     assert {"success", "val_success", "val_progress", "val_mean_jumps_won", "is_best"} <= set(header)
+    assert {"success_mini_a", "success_level_1", "val_success_mini_b"} <= set(header)     # éxito por nivel
+
+
+# ------------------------------------------------------------------ progresión de niveles
+def test_progression_in_level_file(registered_minis, tmp_path):
+    import json
+    from gd_env import resolve_levels
+
+    def spec(**data):
+        f = tmp_path / f"p{len(list(tmp_path.iterdir()))}.json"
+        f.write_text(json.dumps(data))
+        return str(f)
+
+    out = resolve_levels([spec(niveles=["level_1", "mini_a", "mini_b"], validacion="mini_b",
+                               progresion={"etapas": [["level_1"], ["mini_a", "mini_b"]], "ventana": 10})])
+    # mini_b es de validación: sale de su etapa; los valores que faltan toman el valor por defecto
+    assert out["progression"] == {"etapas": [["level_1"], ["mini_a"]], "desbloquear": 0.8, "ventana": 10, "piso": 0.2}
+    with pytest.raises(ValueError):            # un nivel de entrenamiento sin etapa
+        resolve_levels([spec(niveles=["level_1", "mini_a"], progresion={"etapas": [["level_1"]]})])
+    with pytest.raises(ValueError):            # un nivel en dos etapas
+        resolve_levels([spec(niveles=["level_1", "mini_a"], progresion={"etapas": [["level_1", "mini_a"], ["mini_a"]]})])
+    with pytest.raises(ValueError):            # clave mal escrita
+        resolve_levels([spec(niveles=["level_1"], progresion={"etapas": [["level_1"]], "piso_": 0.1})])
+
+
+def test_level_progression_logic():
+    """Desbloqueo por etapas, piso, peso máximo para niveles sin datos y recuperación de un nivel olvidado."""
+    from agents.callbacks import LevelProgression
+    p = LevelProgression(["a", "b", "c"], [1.0, 1.0, 2.0], [["a"], ["b", "c"]], unlock=0.75, window=4, floor=0.2)
+    assert p.weights() == [1.0, 0.0, 0.0]                         # sólo la primera etapa; sin datos = peso máximo
+    assert not any(p.observe("a", True) for _ in range(3))        # ventana incompleta: no decide
+    assert p.weights() == [pytest.approx(0.2), 0.0, 0.0]          # domina "a": baja al piso, nunca a 0
+    assert p.observe("a", False) and p.stage == 1                 # 3/4 = 0.75 >= unlock: se desbloquea la etapa 2
+    assert p.weights() == [pytest.approx(0.25), 1.0, 2.0]         # nuevos sin datos: peso máximo (x peso base)
+    for _ in range(4):
+        p.observe("b", True)
+        p.observe("c", True)
+    assert p.stage == 1                                           # última etapa: no hay más que desbloquear
+    for _ in range(4):
+        p.observe("a", False)                                     # olvida "a"...
+    assert p.weights()[0] == pytest.approx(1.0)                   # ...y su peso vuelve al máximo
+    assert p.weights()[1:] == [pytest.approx(0.2), pytest.approx(0.4)]
+
+
+def test_level_progression_reaches_inner_env(tmp_path):
+    """Integrado con SB3: los pesos llegan al entorno de adentro y la columna 'level' queda en monitor/."""
+    from agents import build_model, make_train_env
+    from agents.callbacks import LevelProgression
+    a, b = mini_levels()
+    prog = LevelProgression(["mini_a", "mini_b"], [1.0, 1.0], [["mini_a"], ["mini_b"]], window=2,
+                            log_path=tmp_path / "progresion.csv")
+    venv = make_train_env("features", n_envs=2, seed=0, random_phase=False, monitor_dir=str(tmp_path / "mon"),
+                          level=[a, b], level_weights=prog.weights())
+    model = build_model("ppo", venv, seed=0)
+    model.learn(total_timesteps=512, callback=prog)
+    assert [e.unwrapped.level_weights for e in venv.envs] == [prog.weights()] * 2
+    assert prog.weights()[1] == 0.0                               # sin entrenar no gana: mini_b sigue bloqueado
+    assert "level" in (tmp_path / "mon" / "0.monitor.csv").read_text().splitlines()[1]
+    assert {"mini_b"} != {l.split(",")[-1] for l in (tmp_path / "mon" / "0.monitor.csv").read_text().splitlines()[2:]}
+    assert (tmp_path / "progresion.csv").read_text().startswith("timesteps,event,stage,w_mini_a,w_mini_b")
+
+
+# ------------------------------------------------------------------ términos de la recompensa (--rewards)
+from gd_env import build_level
+
+SANTI_LEVELS = ["santi_facil", "santi_intermedio_1", "santi_intermedio_2", "santi_intermedio_dificil", "santi_dificil"]
+
+
+@pytest.mark.parametrize("name", SANTI_LEVELS)
+def test_santi_levels_registered_and_solvable(name):
+    lv = gd_env.get_level(name)
+    assert lv.height == level_1().height and lv.start_x == 2.0
+    assert gd_env.solve(lv, ph.Physics()) is not None
+
+
+def test_rewards_default_is_unchanged():
+    """Sin rewards (o con los términos por defecto) la recompensa es exactamente la de siempre."""
+    pol = lambda o, e: int(e.state.t % 7 == 0)
+    _, r0 = run(GeometryDashEnv(obs_mode="features", jump_penalty=0.05), pol)
+    _, r1 = run(GeometryDashEnv(obs_mode="features", jump_penalty=0.05, rewards=gd_env.DEFAULT_TERMS), pol)
+    assert r1 == pytest.approx(r0)
+
+
+def test_rewards_terms_can_be_switched_off():
+    pol = lambda o, e: 0                       # nunca salta: choca
+    _, r_all = run(GeometryDashEnv(obs_mode="features"), pol)
+    _, r_nodeath = run(GeometryDashEnv(obs_mode="features", rewards=["progress", "win"]), pol)
+    assert r_nodeath == pytest.approx(r_all + 10.0)             # sin el término death no hay castigo
+    _, r_noprog = run(GeometryDashEnv(obs_mode="features", rewards=["death"]), pol)
+    assert r_noprog == pytest.approx(-10.0)                     # sólo el castigo por morir
+    win = GeometryDashEnv(obs_mode="features", rewards=["progress", "death"])    # sin win: ganar no suma el bonus
+    opol = OraclePolicy(win)
+    _, ret = run(win, lambda o, e: opol.predict(o)[0])
+    assert ret == pytest.approx(1.0)
+    # jump_penalty apagado: el valor no se cobra (aunque venga con jump_penalty > 0)
+    jp = GeometryDashEnv(obs_mode="features", jump_penalty=0.1, rewards=["progress", "win", "death"])
+    opol = OraclePolicy(jp)
+    _, ret = run(jp, lambda o, e: opol.predict(o)[0])
+    assert ret == pytest.approx(2.0)
+
+
+def test_rewards_validation_errors():
+    with pytest.raises(ValueError, match="excluyentes"):
+        GeometryDashEnv(rewards=["progress", "jump_penalty", "salto_preciso"])
+    with pytest.raises(ValueError, match="excluyentes"):
+        GeometryDashEnv(rewards=["progress", "salto_preciso"], jump_penalty=0.05)
+    with pytest.raises(ValueError, match="desconocido"):
+        GeometryDashEnv(rewards=["progress", "inventado"])
+    with pytest.raises(ValueError, match="vacío"):
+        GeometryDashEnv(rewards=[])
+    with pytest.raises(ValueError, match="alternativas"):
+        GeometryDashEnv(rewards=["progress"], reward_fn=lambda tr: 0.0)
+
+
+def test_salto_preciso_term_values():
+    """Piso liso -> -0.06; un solo pincho -> gratis; pinchos seguidos (^^^) -> +0.03 por cada uno; sin salto -> 0."""
+    from gd_env import Transition
+    from gd_env.physics import State, OK
+    flat = build_level(length=40, height=7, name="plano")
+    spikes3 = build_level(length=40, height=7, spikes=[12, 13, 14], name="tres")
+    spike1 = build_level(length=40, height=7, spikes=[12], name="uno")
+
+    def tr(lv, x, jumped=True):
+        s = ph.initial_state(lv, ph.Physics(), x)
+        return Transition(s, s, OK, lv, jumped)
+
+    assert gd_env.salto_preciso_term(tr(flat, 5.0)) == pytest.approx(-0.06)
+    assert gd_env.salto_preciso_term(tr(spike1, 10.0)) == 0.0
+    assert gd_env.salto_preciso_term(tr(spikes3, 11.0)) == pytest.approx(0.09)
+    assert gd_env.salto_preciso_term(tr(spikes3, 11.0, jumped=False)) == 0.0
+
+
+def test_salto_preciso_in_env():
+    pol = lambda o, e: int(e.state.t % 5 == 0)
+    lv = build_level(length=40, height=7, spikes=[20], name="un_pincho")
+    base = GeometryDashEnv(level=lv, obs_mode="features", rewards=["progress", "win", "death"])
+    sp = GeometryDashEnv(level=lv, obs_mode="features", rewards=["progress", "win", "death", "salto_preciso"])
+    _, r_base = run(base, pol)
+    _, r_sp = run(sp, pol)
+    assert r_sp != pytest.approx(r_base)        # el término suma algo (saltos en piso liso)
+
+
+def test_rewards_survive_through_config():
+    pytest.importorskip("stable_baselines3")
+    from agents.runs import reward_kwargs
+    kw = reward_kwargs({"jump_penalty": 0.0, "rewards": ["progress", "win", "death", "salto_preciso"]})
+    assert kw["rewards"] == ["progress", "win", "death", "salto_preciso"]
+    assert GeometryDashEnv(**kw).rewards == ("progress", "win", "death", "salto_preciso")
+    assert "rewards" not in reward_kwargs({"jump_penalty": 0.0})
+
+
+def test_train_validates_rewards_before_training(tmp_path):
+    pytest.importorskip("stable_baselines3")
+    from agents import train
+    kw = dict(out=str(tmp_path), timesteps=10, seeds=[0])
+    with pytest.raises(ValueError, match="excluyentes"):
+        train("ppo", rewards=["progress", "jump_penalty", "salto_preciso"], **kw)
+    with pytest.raises(ValueError, match="excluyentes"):
+        train("ppo", rewards=["progress", "salto_preciso"], jump_penalty=0.05, **kw)
+    with pytest.raises(ValueError, match="death_penalty"):          # parámetro de un término apagado
+        train("ppo", rewards=["progress", "win"], death_penalty=5.0, **kw)
+    with pytest.raises(ValueError, match="jump_penalty"):
+        train("ppo", rewards=["progress", "win", "death"], jump_penalty=0.05, ramp=True, **kw)
+    with pytest.raises(ValueError, match="alternativas"):
+        train("ppo", rewards=["progress"], reward_fn="ejemplos/reward_santi.py:salto_preciso", **kw)
+    assert not list(tmp_path.iterdir())          # falló antes de crear la carpeta de la corrida
+
+
+@pytest.mark.parametrize("name", SANTI_LEVELS)
+def test_santi_levels_solvable_from_eval_phases(name):
+    lv = gd_env.get_level(name)
+    for x0 in np.linspace(2.0, 2.95, 10):       # las mismas fases que EVAL_PHASES (agents.common)
+        start = ph.initial_state(lv, ph.Physics(), float(x0))
+        assert gd_env.solve(lv, ph.Physics(), start) is not None, f"{name} sin solución desde x0={x0:.2f}"
+
+
+def test_franco_sin_saltar_wins_only_without_jumping():
+    """Techo de pinchos colgantes: no saltar gana; saltar (aunque sea una vez) mata."""
+    lv = gd_env.get_level("franco_sin_saltar")
+    assert gd_env.solve(lv, ph.Physics()).n_jumps == 0
+    for x0 in np.linspace(2.0, 2.95, 10):
+        info, _ = run(GeometryDashEnv(level=lv, obs_mode="features"), lambda o, e: 0, options={"x0": float(x0)})
+        assert info["success"], f"no saltar debería ganar desde x0={x0:.2f}"
+    for t_jump in (0, 5, 17, 40, 100):          # un solo salto, en distintos momentos (también en la fase de arranque)
+        info, _ = run(GeometryDashEnv(level=lv, obs_mode="features"), lambda o, e, t=t_jump: int(e.state.t == t))
+        assert not info["success"] and info["status"] == ph.SPIKE_HIT, f"saltar en t={t_jump} debería matar"

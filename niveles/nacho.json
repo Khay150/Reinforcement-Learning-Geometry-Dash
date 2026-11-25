@@ -1,0 +1,5 @@
+{
+  "_nota": "Entrena en los 4 niveles de nacho con el mismo peso y valida contra level_1 (held out: no se entrena en él).",
+  "niveles": ["nacho_facil", "nacho_medio", "nacho_dificil", "nacho_muy_dificil"],
+  "validacion": "level_1"
+}

@@ -5,7 +5,8 @@ from .env import GeometryDashEnv
 from .levels import LEVELS, build_level, get_level, level_1, parse_level, resolve_levels, to_ascii
 from .oracle import Oracle, OraclePolicy, solve
 from .physics import Level, Physics
-from .rewards import Transition, adapt_reward_fn, default_reward, load_reward_fn, reward_spec
+from .rewards import (DEFAULT_TERMS, REWARD_TERMS, Transition, adapt_reward_fn, default_reward, load_reward_fn,
+                      reward_spec, reward_terms, salto_preciso_term, validate_terms)
 from .render import record_episode, render_frame, trajectory_image
 
 register(id="GeometryDash-v0", entry_point="gd_env.env:GeometryDashEnv")
@@ -14,5 +15,6 @@ __all__ = ["GeometryDashEnv", "Level", "Physics", "LEVELS", "level_1", "get_leve
            "build_level", "parse_level",
            "to_ascii", "solve", "Oracle", "OraclePolicy",
            "Transition", "default_reward", "load_reward_fn", "reward_spec",
+           "REWARD_TERMS", "DEFAULT_TERMS", "reward_terms", "salto_preciso_term", "validate_terms",
            "record_episode", "render_frame", "trajectory_image",
            "Difficulty", "JumpInfo", "level_difficulty", "difficulty_over_phases"]

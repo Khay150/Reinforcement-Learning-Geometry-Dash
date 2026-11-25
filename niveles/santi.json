@@ -1,0 +1,11 @@
+{
+  "_nota": "Entrena en los 5 niveles de santi (con pesos crecientes según dificultad) y valida en level_1 (held out).",
+  "niveles": {
+    "santi_facil": 1.0,
+    "santi_intermedio_1": 1.0,
+    "santi_intermedio_2": 1.5,
+    "santi_intermedio_dificil": 1.5,
+    "santi_dificil": 2.0
+  },
+  "validacion": "level_1"
+}

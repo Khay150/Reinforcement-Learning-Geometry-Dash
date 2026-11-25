@@ -17,8 +17,9 @@ from typing import Callable
 from stable_baselines3.common.callbacks import CheckpointCallback
 
 from gd_env import resolve_levels, reward_spec
+from gd_env.rewards import TERM_PARAMS, validate_terms
 
-from .callbacks import BestModelCallback, PerformanceJumpPenaltyRamp
+from .callbacks import BestModelCallback, LevelProgression, PerformanceJumpPenaltyRamp
 from .common import EVAL_PHASES, ON_POLICY, build_model, load_for_training, load_model, make_train_env
 from .evaluate import describe, summarize
 from .runs import evaluate_and_record, level_kwargs, reward_kwargs
@@ -30,11 +31,15 @@ def run_name_from(cfg: dict) -> str:
     if cfg["levels"]:                       # p. ej. lv-ejemplo (de niveles/ejemplo.json) o lv-level_1+level_2
         items = [cfg["levels"]] if isinstance(cfg["levels"], str) else cfg["levels"]
         parts.append("lv-" + "+".join(Path(i).stem for i in items))
+    if cfg.get("progression"):
+        parts.append("prog")
     if cfg["jump_penalty"]:
         parts.append(f"jp{cfg['jump_penalty']:g}")
     if cfg["ramp"]:
         parts.append("ramp")
-    for key, tag in (("death_penalty", "dp"), ("win_bonus", "wb"), ("progress_scale", "ps"), ("survive_bonus", "sb")):
+    if cfg["rewards"] is not None:          # p. ej. rw-progress+win+death+salto_preciso
+        parts.append("rw-" + "+".join(cfg["rewards"]))
+    for key, tag in (("death_penalty", "dp"), ("win_bonus", "wb"), ("progress_scale", "ps"), ("survive_bonus", "sb"), ("survive_interval", "si"), ("survive_rate", "sr")):
         if cfg[key] is not None:
             parts.append(f"{tag}{cfg[key]:g}")
     if cfg["reward_fn"] is not None:
@@ -53,11 +58,23 @@ def unique_dir(path: Path) -> Path:
     return new
 
 
-def _callbacks(cfg: dict, d: Path, n_envs: int, env_kwargs: dict, val_kwargs: dict) -> list:
-    """Callbacks de SB3: checkpoints periódicos, rampa de la penalización por salto y mejor modelo."""
+def _progression(cfg: dict, d: Path) -> LevelProgression | None:
+    """Callback de progresión de niveles (uno nuevo por seed), si el .json de niveles define ``progresion``."""
+    p = cfg.get("progression")
+    if not p:
+        return None
+    return LevelProgression(list(cfg["train_levels"]), list(cfg["train_levels"].values()), p["etapas"],
+                            unlock=p["desbloquear"], window=p["ventana"], floor=p["piso"], log_path=d / "progresion.csv")
+
+
+def _callbacks(cfg: dict, d: Path, n_envs: int, env_kwargs: dict, val_kwargs: dict,
+               progression: LevelProgression | None = None) -> list:
+    """Callbacks de SB3: checkpoints periódicos, progresión de niveles, rampa de la penalización y mejor modelo."""
     callbacks = []
     if cfg["checkpoint_freq"] > 0:          # save_freq cuenta llamadas al VecEnv: cada una son n_envs pasos
         callbacks.append(CheckpointCallback(max(cfg["checkpoint_freq"] // n_envs, 1), str(d / "checkpoints"), "model"))
+    if progression is not None:
+        callbacks.append(progression)
     if cfg["ramp"]:
         callbacks.append(PerformanceJumpPenaltyRamp(cfg["jump_penalty"], cfg["ramp_step"], cfg["ramp_window"],
                                                     cfg["ramp_up"], cfg["ramp_down"], log_path=d / "jump_penalty.csv"))
@@ -70,15 +87,20 @@ def _train_one(cfg: dict, algo: str, seed: int, d: Path, env_kwargs: dict, val_k
     """Entrena un agente, lo guarda y evalúa el modelo final y el mejor, en los niveles de entrenamiento y en los de
     validación. Devuelve ``{"final", "best", "final_val", "best_val"}`` (filas por fase; las de "best" pueden ser None)."""
     n_envs = cfg["n_envs"] if algo in ON_POLICY else 1       # PPO/A2C: varios entornos; DQN/QR-DQN: uno
+    progression = _progression(cfg, d)
+    # Con progresión, los entornos se crean ya con los pesos de la primera etapa: SB3 resetea los entornos antes de
+    # llamar a los callbacks, y si no los primeros episodios podrían caer en niveles todavía bloqueados.
+    train_kwargs = {**env_kwargs, "level_weights": progression.weights()} if progression else env_kwargs
     env = make_train_env(cfg["obs"], n_envs, seed, random_phase=cfg["train_phase"] == "random",
-                         monitor_dir=str(d / "monitor"), **env_kwargs)
+                         monitor_dir=str(d / "monitor"), **train_kwargs)
     if cfg["init_model"]:                               # seguir entrenando un modelo ya guardado (fine-tuning)
         model = load_for_training(algo, cfg["init_model"], env, seed)
     else:                                               # modelo nuevo; obs decide MLP (features) o CNN (grid/dict)
         model = build_model(algo, env, seed, cfg["obs"])
 
     t0 = time.time()
-    model.learn(total_timesteps=cfg["timesteps"], callback=_callbacks(cfg, d, n_envs, env_kwargs, val_kwargs))
+    model.learn(total_timesteps=cfg["timesteps"],
+                callback=_callbacks(cfg, d, n_envs, env_kwargs, val_kwargs, progression))
     model.save(d / "model")                             # modelo final (puede no ser el mejor: ver best_model.zip)
     env.close()
 
@@ -115,8 +137,12 @@ def train(
     death_penalty: float | None = None,        # castigo al morir (def. 10)
     win_bonus: float | None = None,            # premio al llegar a la meta (def. 1)
     progress_scale: float | None = None,       # lo que vale cruzar todo el nivel (def. 1)
-    survive_bonus: float | None = None,        # bonus por tick vivo (def. 0)
+    survive_bonus: float | None = None,        # bonus por supervivencia (def. 0)
+    survive_interval: int | None = None,       # el bonus se da cada N ticks vivo (def. 1 = todos los ticks)
+    survive_rate: float | None = None,         # alternativa a survive_bonus: bonus por tick = survive_rate * jump_penalty
     reward_fn: Callable | str | None = None,   # recompensa propia (reemplaza a la de por defecto), o 'archivo.py:funcion'
+    rewards: list[str] | None = None,          # términos prendidos: progress, win, death, survive, jump_penalty, salto_preciso
+                                               # (None = los de siempre: todos menos salto_preciso)
     # ---- rampa de la penalización por salto
     ramp: bool = False, ramp_step: float = 0.01, ramp_window: int = 20, ramp_up: float = 0.8, ramp_down: float = 0.4,
     # ---- guardado
@@ -130,13 +156,29 @@ def train(
     cfg = dict(algos=algos, seeds=list(seeds), timesteps=timesteps, obs=obs, train_phase=train_phase, n_envs=n_envs,
                levels=levels, val_seed=val_seed,
                jump_penalty=jump_penalty, death_penalty=death_penalty, win_bonus=win_bonus,
-               progress_scale=progress_scale, survive_bonus=survive_bonus, reward_fn=reward_fn, ramp=ramp,
+               progress_scale=progress_scale, survive_bonus=survive_bonus, survive_interval=survive_interval,
+               survive_rate=survive_rate, reward_fn=reward_fn, rewards=rewards, ramp=ramp,
                ramp_step=ramp_step, ramp_window=ramp_window, ramp_up=ramp_up, ramp_down=ramp_down,
                checkpoint_freq=checkpoint_freq, eval_freq=eval_freq, init_model=init_model, run_name=run_name,
                out=out, gif=gif)
     # Combinaciones inválidas: se cortan acá, antes de gastar tiempo entrenando.
+    if rewards is not None:
+        cfg["rewards"] = rewards = list(validate_terms(rewards))    # desconocidos / vacío / jump_penalty + salto_preciso
+        if reward_fn is not None:
+            raise ValueError("rewards y reward_fn son alternativas: reward_fn ya reemplaza toda la recompensa")
+        if "salto_preciso" in rewards and (jump_penalty or ramp):
+            raise ValueError("'salto_preciso' y jump_penalty/ramp son excluyentes: salto_preciso ya fija el costo de saltar")
+        for term, params in TERM_PARAMS.items():                    # parámetros de un término apagado: error, no se ignoran
+            given = [p for p in params if cfg.get(p)]
+            if term not in rewards and given:
+                raise ValueError(f"pasaste {', '.join(given)} pero el término '{term}' no está en rewards={rewards}: "
+                                 f"agregalo a --rewards o sacá el parámetro")
     if ramp and not jump_penalty:
         raise ValueError("ramp necesita jump_penalty > 0 (el valor máximo de c)")
+    if survive_rate and survive_bonus:
+        raise ValueError("survive_rate y survive_bonus son alternativas: pasá sólo una")
+    if survive_rate and not jump_penalty:
+        raise ValueError("survive_rate se mide en proporción a jump_penalty: necesita jump_penalty > 0")
     if init_model and len(algos) != 1:
         raise ValueError("init_model requiere un solo algoritmo (el del modelo)")
     if init_model and not Path(init_model).is_file():
@@ -146,7 +188,8 @@ def train(
         cfg["reward_fn"] = reward_fn = load_reward_fn(reward_fn)     # falla ya si el texto está mal
 
     split = resolve_levels(levels, val_seed)             # niveles de entrenamiento (con peso) y de validación
-    cfg.update(train_levels=split["train"], val_levels=split["val"], val_held_out=split["held_out"])
+    cfg.update(train_levels=split["train"], val_levels=split["val"], val_held_out=split["held_out"],
+               progression=split["progression"])
     reward = reward_kwargs(cfg)                          # parámetros de la recompensa que van al entorno
     env_kwargs = {**reward, **level_kwargs(cfg)}         # entrenamiento (y elección del mejor modelo)
     val_kwargs = {**reward, **level_kwargs(cfg, "val")}  # validación: sólo se mide
@@ -172,6 +215,8 @@ def train(
     train_names = ", ".join(f"{n} (peso {w:g})" for n, w in split["train"].items())
     val_note = "held out" if split["held_out"] else "no reservado: también se entrena en él"
     text = f"Niveles de entrenamiento: {train_names}\nValidación: {', '.join(split['val'])} ({val_note})\n"
+    if split["progression"]:
+        text += "Progresión: " + " -> ".join("[" + ", ".join(st) + "]" for st in split["progression"]["etapas"]) + "\n"
     for key, title in (("final", "Modelo final"), ("best", "Mejor modelo (best_model.zip)")):
         if results[key]:
             text += f"\n## {title}: niveles de entrenamiento\n\n" + summarize(results[key]) + "\n"

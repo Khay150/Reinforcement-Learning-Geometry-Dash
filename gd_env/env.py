@@ -8,7 +8,7 @@ from gymnasium import spaces
 from . import physics as ph
 from .levels import level_1
 from .physics import DEAD, WIN, Level, Physics, State
-from .rewards import RewardFn, Transition, adapt_reward_fn, default_reward
+from .rewards import RewardFn, Transition, adapt_reward_fn, reward_terms, validate_terms
 
 
 class GeometryDashEnv(gym.Env):
@@ -34,6 +34,10 @@ class GeometryDashEnv(gym.Env):
     apoyado; apretar 1 en el aire no cuesta nada). Se aplica también si hay
     ``reward_fn``, sumado a lo que esta devuelva.
 
+    ``rewards``: qué términos de la recompensa están prendidos (ver ``REWARD_TERMS`` en ``gd_env/rewards.py``:
+    progress, win, death, survive, jump_penalty, salto_preciso). None = los de siempre (todos menos ``salto_preciso``).
+    ``jump_penalty`` y ``salto_preciso`` son excluyentes. No se combina con ``reward_fn`` (que ya reemplaza todo).
+
     Varios niveles: ``level`` puede ser una lista. En cada ``reset`` se sortea uno con probabilidad proporcional a
     ``level_weights`` (por defecto, todos iguales; un peso 0 deja el nivel cargado pero sin jugarse). Los pesos se
     pueden cambiar en medio del entrenamiento (p. ej. con ``set_wrapper_attr`` desde un callback).
@@ -53,8 +57,11 @@ class GeometryDashEnv(gym.Env):
         progress_scale: float = 1.0,     # cuánto vale recorrer todo el nivel (recompensa por avanzar)
         win_bonus: float = 1.0,          # bonus al llegar a la meta
         death_penalty: float = 10.0,     # castigo al morir (alto frente a jump_penalty: morir cuesta más que saltar)
-        survive_bonus: float = 0.0,      # bonus por tick vivo (0 = no se usa)
+        survive_bonus: float = 0.0,      # bonus por supervivencia (0 = no se usa)
+        survive_interval: int = 1,       # el bonus se da cada N ticks vivo (1 = en todos los ticks)
+        survive_rate: float = 0.0,       # alternativa a survive_bonus: bonus por tick = survive_rate * jump_penalty (sigue a la rampa)
         jump_penalty: float = 0.0,       # castigo por cada salto efectivo (0 = no se usa)
+        rewards: tuple[str, ...] | list[str] | None = None,   # términos de recompensa prendidos (None = los de siempre)
         reward_fn: RewardFn | None = None,   # reemplaza la recompensa por defecto (ver gd_env/rewards.py)
         max_steps: int | None = None,    # límite de ticks por episodio (por defecto 1.5x lo que dura el nivel)
         render_mode: str | None = None,
@@ -69,7 +76,15 @@ class GeometryDashEnv(gym.Env):
         self.obs_mode, self.window, self.lookahead = obs_mode, window, lookahead
         self.progress_scale, self.win_bonus = progress_scale, win_bonus
         self.death_penalty, self.survive_bonus = death_penalty, survive_bonus
+        self.survive_interval, self.survive_rate = survive_interval, survive_rate
+        if survive_rate and survive_bonus:
+            raise ValueError("survive_rate y survive_bonus son alternativas: pasá sólo una")
         self.jump_penalty = jump_penalty
+        self.rewards = validate_terms(rewards)           # términos prendidos (falla si hay uno desconocido o excluyentes)
+        if rewards is not None and reward_fn is not None:
+            raise ValueError("rewards y reward_fn son alternativas: reward_fn ya reemplaza toda la recompensa")
+        if "salto_preciso" in self.rewards and jump_penalty:
+            raise ValueError("'salto_preciso' y jump_penalty > 0 son excluyentes: salto_preciso ya fija el costo de saltar")
         self.reward_fn = reward_fn                       # property: acepta fn(tr) o fn(prev, new, status, level)
         self.render_mode = render_mode
 
@@ -118,7 +133,7 @@ class GeometryDashEnv(gym.Env):
 
         tr = Transition(prev, self.state, self.status, self.level, jumped)
         reward = self._reward(tr)
-        if jumped:                                          # la penalización por salto se suma a cualquier recompensa
+        if jumped and "jump_penalty" in self.rewards:       # la penalización por salto se suma a cualquier recompensa
             reward -= self.jump_penalty
         terminated = self.status in DEAD or self.status == WIN     # murió o ganó
         self._done = terminated
@@ -158,8 +173,12 @@ class GeometryDashEnv(gym.Env):
         """Recompensa del tick: la de ``reward_fn`` si hay, si no la de por defecto con los parámetros del entorno."""
         if self._reward_fn is not None:
             return float(self._reward_fn(tr))
-        return default_reward(tr, progress_scale=self.progress_scale, win_bonus=self.win_bonus,
-                              death_penalty=self.death_penalty, survive_bonus=self.survive_bonus)
+        bonus = self.survive_bonus
+        if self.survive_rate:       # bonus por tick = rate * c, con c = jump_penalty vigente (la rampa lo va cambiando)
+            bonus = self.survive_rate * self.jump_penalty * max(int(self.survive_interval), 1)
+        return reward_terms(tr, self.rewards, progress_scale=self.progress_scale, win_bonus=self.win_bonus,
+                            death_penalty=self.death_penalty, survive_bonus=bonus,
+                            survive_interval=self.survive_interval)
 
     def _info(self) -> dict:
         """Datos extra que devuelve Gymnasium en cada reset/step (no son la observación del agente)."""
@@ -185,7 +204,7 @@ class GeometryDashEnv(gym.Env):
             if 0 <= c < lv.length:
                 col = lv.grid[:, c]
                 g[0, :, j] = col == ph.BLOCK
-                g[1, :, j] = col == ph.SPIKE
+                g[1, :, j] = (col == ph.SPIKE) | (col == ph.SPIKE_DOWN)      # ambos pinchos en el canal 1 (misma forma de la grilla)
         g = g[:, ::-1, :]                                       # piso abajo
         # Posición del jugador en la grilla (fila y columna del tile que ocupa su centro).
         pr = int(np.clip(np.floor(s.y + 0.5), 0, lv.height - 1))
@@ -226,7 +245,7 @@ class GeometryDashEnv(gym.Env):
                 if (r, c) == (pr, pc):
                     row.append("P")
                 else:
-                    row.append(".#^"[int(lv.grid[r, c])])
+                    row.append(".#^v"[int(lv.grid[r, c])])
             lines.append("".join(row))
         return "\n".join(lines)
 

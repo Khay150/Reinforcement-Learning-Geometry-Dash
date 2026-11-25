@@ -1,6 +1,7 @@
 """Callbacks de entrenamiento (Stable-Baselines3).
 
 * ``PerformanceJumpPenaltyRamp``: sube la penalización por salto ``c`` sólo cuando el agente ya gana.
+* ``LevelProgression``: introduce los niveles de a poco, por etapas, y reparte los episodios según el desempeño.
 * ``BestModelCallback``: evalúa cada N pasos y guarda el mejor modelo (no sólo el último).
 """
 from __future__ import annotations
@@ -13,7 +14,7 @@ import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 
 from .common import EVAL_PHASES
-from .evaluate import append_row, evaluate_policy_phases, metrics
+from .evaluate import append_row, evaluate_policy_phases, metrics, success_by_level
 
 
 class PerformanceJumpPenaltyRamp(BaseCallback):
@@ -69,6 +70,88 @@ class PerformanceJumpPenaltyRamp(BaseCallback):
         return True
 
 
+class LevelProgression(BaseCallback):
+    """Progresión de niveles (en la literatura, *curriculum learning*): los niveles se introducen de a poco, por etapas.
+
+    Qué hace, paso a paso:
+
+    1. Arranca con sólo la primera etapa activa; los niveles de las etapas siguientes tienen peso 0 (no se juegan).
+    2. Cada vez que termina un episodio de entrenamiento, anota si ganó en una ventana con los últimos ``window``
+       episodios de *ese* nivel (el nivel viene en ``info["level"]``).
+    3. Recalcula el peso de cada nivel (la probabilidad relativa de que salga en el próximo episodio):
+         * bloqueado (etapa todavía no alcanzada): 0;
+         * activo: ``peso_base * max(floor, 1 - éxito_reciente)``. Se practica más lo que más falla. Un nivel recién
+           desbloqueado (sin episodios) cuenta como éxito 0, así que entra con el peso máximo. Uno ya dominado baja
+           hasta ``floor`` pero nunca a 0: se lo sigue repasando. Si el agente lo empieza a olvidar, su éxito baja y su
+           peso vuelve a subir solo (así se evita el *olvido catastrófico*).
+    4. Cuando **todos** los niveles activos tienen la ventana llena con éxito >= ``unlock``, desbloquea la etapa siguiente.
+    5. Pasa los pesos a los entornos en paralelo (``set_wrapper_attr``, igual que la rampa de la penalización por
+       salto) y registra en ``log_path`` (CSV) cada cambio de etapa y, cada ``window`` episodios, los pesos y el éxito
+       de cada nivel.
+
+    El éxito es el de los episodios de entrenamiento (con exploración), por eso el umbral por defecto es 0.8 y no 1.
+    ``levels`` y ``base_weights`` van en el mismo orden que los niveles del entorno (``GeometryDashEnv.levels``).
+    """
+
+    def __init__(self, levels: list[str], base_weights: list[float], stages: list[list[str]], unlock: float = 0.8,
+                 window: int = 50, floor: float = 0.2, log_path: str | Path | None = None):
+        super().__init__()
+        self.levels, self.base = list(levels), list(base_weights)
+        self.stage_of = {name: i for i, stage in enumerate(stages) for name in stage}
+        assert sorted(self.stage_of) == sorted(self.levels), "cada nivel tiene que estar en exactamente una etapa"
+        self.n_stages, self.unlock, self.floor, self.log_path = len(stages), unlock, floor, log_path
+        self.window = window
+        self.stage = 0
+        self.results = {name: deque(maxlen=window) for name in self.levels}   # últimos episodios de cada nivel
+        self.episodes = 0
+
+    def active(self) -> list[str]:
+        return [n for n in self.levels if self.stage_of[n] <= self.stage]
+
+    def success(self, name: str) -> float:
+        """Éxito reciente del nivel (0 si todavía no se jugó)."""
+        return float(np.mean(self.results[name])) if self.results[name] else 0.0
+
+    def weights(self) -> list[float]:
+        """Peso de cada nivel, en el orden de ``levels`` (paso 3 de arriba)."""
+        return [b * max(self.floor, 1.0 - self.success(n)) if self.stage_of[n] <= self.stage else 0.0
+                for n, b in zip(self.levels, self.base)]
+
+    def observe(self, name: str, success: bool) -> bool:
+        """Registra un episodio terminado. Devuelve True si se desbloqueó una etapa nueva (paso 4)."""
+        self.results[name].append(float(success))
+        self.episodes += 1
+        ready = all(len(self.results[n]) == self.window and self.success(n) >= self.unlock for n in self.active())
+        if ready and self.stage < self.n_stages - 1:
+            self.stage += 1
+            return True
+        return False
+
+    def _apply(self, event: str):
+        """Pasa los pesos actuales a los entornos y anota una fila en el CSV."""
+        self.training_env.env_method("set_wrapper_attr", "level_weights", self.weights())
+        if self.log_path:
+            append_row({"timesteps": self.num_timesteps, "event": event, "stage": self.stage,
+                        **{f"w_{n}": round(w, 4) for n, w in zip(self.levels, self.weights())},
+                        **{f"success_{n}": round(self.success(n), 3) for n in self.levels}}, self.log_path)
+
+    def _on_training_start(self):
+        self._apply("inicio")
+
+    def _on_step(self) -> bool:
+        for info in self.locals["infos"]:
+            if "episode" not in info:                    # sólo cuentan los episodios terminados
+                continue
+            if self.observe(info["level"], info["success"]):
+                self._apply(f"etapa {self.stage + 1}/{self.n_stages}")           # pesos nuevos + registro
+            elif self.episodes % self.window == 0:
+                self._apply("pesos")                                             # registro periódico
+            else:
+                self.training_env.env_method("set_wrapper_attr", "level_weights", self.weights())
+        self.logger.record("train/etapa", self.stage)
+        return True
+
+
 def _score(m: dict) -> tuple:
     """Cuál modelo es mejor: más éxito, luego más progreso, luego menos saltos."""
     jumps = m["mean_jumps_won"]
@@ -98,13 +181,14 @@ class BestModelCallback(BaseCallback):
     def _evaluate(self):
         """Evalúa el modelo actual en las fases, lo registra en el historial y, si es el mejor hasta ahora, lo guarda."""
         self._last_eval = self.num_timesteps
-        m = metrics(evaluate_policy_phases(self.model, self.obs_mode, self.phases, **self.env_kwargs))
+        rows = evaluate_policy_phases(self.model, self.obs_mode, self.phases, **self.env_kwargs)
+        m = metrics(rows)
         is_best = self.best_score is None or _score(m) > self.best_score
-        info = {"timesteps": self.num_timesteps, **m,
+        info = {"timesteps": self.num_timesteps, **m, **success_by_level(rows),
                 "train_jump_penalty": self.training_env.get_attr("jump_penalty", indices=[0])[0]}
         if self.val_env_kwargs is not None:          # validación: sólo se registra
-            vm = metrics(evaluate_policy_phases(self.model, self.obs_mode, self.phases, **self.val_env_kwargs))
-            info.update({f"val_{k}": v for k, v in vm.items()})
+            vrows = evaluate_policy_phases(self.model, self.obs_mode, self.phases, **self.val_env_kwargs)
+            info.update({f"val_{k}": v for k, v in {**metrics(vrows), **success_by_level(vrows)}.items()})
         append_row({**info, "is_best": int(is_best)}, self.save_dir / "eval_history.csv")
         if is_best:
             self.best_score = _score(m)

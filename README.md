@@ -2,18 +2,20 @@
 
 ## Estructura
 - `gd_env/physics.py`: dinámica determinista pura (cubo, gravedad, salto, colisiones). La usan el entorno **y** el oráculo.
-- `gd_env/levels.py`: niveles (`level_1()`, exportable a ASCII con `to_ascii`), `parse_level`, `build_level`, el registro `LEVELS` (nombre → nivel) y `resolve_levels` (traduce `--levels` en niveles de entrenamiento con peso y de validación).
+- `gd_env/levels.py`: niveles (`level_1()` y los demás de "Niveles registrados", exportables a ASCII con `to_ascii`; en el ASCII `#` es bloque, `^` pincho, `v` pincho colgante), `parse_level`, `build_level`, el registro `LEVELS` (nombre → nivel) y `resolve_levels` (traduce `--levels` en niveles de entrenamiento con peso y de validación).
 - `gd_env/env.py`: `GeometryDashEnv` (Gymnasium), registrado como `GeometryDash-v0`.
+- `gd_env/rewards.py`: la recompensa: `Transition` (qué pasó en un tick), `default_reward`, los **términos** que se prenden y apagan con `--rewards` (`REWARD_TERMS`, `reward_terms`, `salto_preciso_term`, `validate_terms`) y la carga de recompensas propias (`load_reward_fn`). Ver "Recompensa y `train()`".
 - `gd_env/oracle.py`: planificador exacto (programación dinámica por capas de tick) + `OraclePolicy`.
 - `gd_env/render.py`: frames, GIF del episodio y mapa del recorrido (`record_episode`).
 - `gd_env/difficulty.py`: dificultad de un nivel medida con la física, sin entrenar (`level_difficulty`): precisión de cada salto, trampas, saltos encadenados y probabilidad de ganar al azar. Ver "Dificultad de un nivel".
 - `agents/__init__.py`: expone la API de agentes (`make_train_env`, `build_model`, `evaluate_policy_phases`, `summarize`, `EVAL_PHASES`, `TRAIN_PHASE_RANGE`).
 - `agents/common.py`: `make_train_env` (con/sin fase aleatoria vía el wrapper `RandomPhase`), `build_model` (PPO/A2C/DQN/QR-DQN con hiperparámetros iniciales; elige MLP o CNN según `obs_mode`), `policy_for` / `policy_kwargs_for`, `load_model` y `load_for_training` (seguir entrenando un modelo).
 - `agents/cnn.py`: extractores CNN propios para SB3: `GridCNN` (observación `grid`) y `GridVecCNN` (observación `dict`: CNN para la grilla + capa lineal para el vector). Ver "Observaciones y CNN".
-- `agents/callbacks.py`: callbacks de SB3: `PerformanceJumpPenaltyRamp` (rampa de la penalización por salto) y `BestModelCallback` (evalúa periódicamente y guarda el mejor modelo).
+- `agents/callbacks.py`: callbacks de SB3: `PerformanceJumpPenaltyRamp` (rampa de la penalización por salto), `LevelProgression` (introduce los niveles por etapas y reparte los episodios según el desempeño; ver "Progresión de niveles") y `BestModelCallback` (evalúa periódicamente y guarda el mejor modelo).
 - `agents/evaluate.py`: `evaluate_policy_phases` (un episodio determinista por fase), `metrics`/`describe`, `save_rows`/`append_row` (CSV) y `summarize` (tabla markdown entre seeds).
+- `ejemplos/`: recompensas propias de ejemplo (`reward_ejemplo.py`, `reward_santi.py`). `niveles/`: conjuntos de niveles con pesos y validación para `--levels` (`ejemplo.json`, `santi.json`, `nacho.json`, y `nacho_progresion.json` con etapas).
 - `agents/runs.py`: `evaluate_and_record` (evalúa un modelo y deja su CSV y GIFs), compartido por `train.py` y `evaluate.py`.
-- `scripts/run_oracle.py`, `scripts/record.py`, `scripts/difficulty.py` (tabla de dificultad de los niveles), `tests/test_env.py` (entorno, oráculo, callbacks), `tests/test_cnn.py` (extractores CNN con los 4 algoritmos) y `tests/test_difficulty.py`.
+- `scripts/run_oracle.py`, `scripts/record.py`, `scripts/difficulty.py` (tabla de dificultad de los niveles), `tests/test_env.py` (entorno, oráculo, términos de recompensa, callbacks), `tests/test_cnn.py` (extractores CNN con los 4 algoritmos), `tests/test_difficulty.py` y `tests/test_spike_down.py` (pincho colgante `v`).
 - `scripts/train.py`: entrena PPO/A2C/DQN/QR-DQN con varias seeds, evalúa y graba GIFs. `scripts/evaluate.py`: re-evalúa modelos guardados. `scripts/record.py --model ... --algo PPO`: GIF de un modelo suelto.
 
 ## Uso
@@ -59,6 +61,10 @@ python scripts/train.py --algos ppo --seeds 0 --timesteps 200000 --init-model ru
 python scripts/train.py --algos ppo dqn --train-phase random --run-name features_random
 # varios niveles (con pesos) y niveles de validación held out, definidos en un .json (ver "Varios niveles")
 python scripts/train.py --algos ppo --levels niveles/ejemplo.json
+# los 5 niveles de Santi con su recompensa (términos a elección, ver "Recompensa y `train()`")
+python scripts/train.py --algos ppo --levels niveles/santi.json --rewards progress win death salto_preciso
+# niveles introducidos por etapas según el desempeño (ver "Progresión de niveles")
+python scripts/train.py --algos ppo --obs grid --levels niveles/nacho_progresion.json
 # re-evaluar modelos guardados (más fases, regrabar GIFs)
 python scripts/evaluate.py --run runs/features_fixed --n-phases 20 --gif
 # re-evaluar un modelo suelto
@@ -86,7 +92,10 @@ Todo lo de la recompensa se pasa como parámetro, por línea de comandos o desde
 | `death_penalty` | `--death-penalty` | 10 | castigo al morir |
 | `jump_penalty` | `--jump-penalty` | 0 | castigo por cada salto efectivo (con `ramp`, el máximo) |
 | `progress_scale` | `--progress-scale` | 1 | lo que vale cruzar todo el nivel |
-| `survive_bonus` | `--survive-bonus` | 0 | bonus por tick vivo |
+| `survive_bonus` | `--survive-bonus` | 0 | bonus por supervivencia |
+| `survive_interval` | `--survive-interval` | 1 | el bonus se da cada N ticks vivo (1 = en todos los ticks) |
+| `survive_rate` | `--survive-rate` | 0 | alternativa a `survive_bonus`: bonus por tick = `survive_rate × jump_penalty` (necesita `jump_penalty > 0`) |
+| `rewards` | `--rewards TERMINO ...` | `progress win death survive jump_penalty` | qué términos de la recompensa quedan prendidos (ver abajo) |
 | `reward_fn` | `--reward-fn archivo.py:funcion` | — | reemplaza la recompensa de por defecto (ver abajo) |
 
 ```python
@@ -99,6 +108,34 @@ python scripts/train.py --algos ppo --win-bonus 2 --death-penalty 5 --jump-penal
 ```
 `train` acepta los mismos argumentos que `scripts/train.py` (`obs`, `train_phase`, `n_envs`, `ramp`, `init_model`, ...) y guarda
 todo en `config.json`, de modo que `scripts/evaluate.py` re-evalúa con la misma recompensa.
+
+**Términos que se prenden y apagan (`--rewards`).** La recompensa está hecha de piezas y en cada entrenamiento se elige cuáles
+valen. Sin `--rewards` queda la de siempre (todo menos `salto_preciso`), así las corridas viejas se reproducen igual.
+
+| Término | Qué hace | Parámetro |
+|---|---|---|
+| `progress` | avanzar: cruzar todo el nivel vale `progress_scale` | `--progress-scale` |
+| `win` | premio al llegar a la meta | `--win-bonus` |
+| `death` | castigo al morir | `--death-penalty` |
+| `survive` | bonus por supervivencia | `--survive-bonus`, `--survive-interval`, `--survive-rate` |
+| `jump_penalty` | castigo fijo por cada salto efectivo (con `--ramp`, sube según el desempeño) | `--jump-penalty` |
+| `salto_preciso` | (Santi) saltar sobre pinchos o pozos sale gratis y suma `+0.03` por cada peligro desde 2 (`^^`, pozo ancho); saltar sin ningún obstáculo en los 3.2 bloques del salto resta `0.06` | — |
+
+```bash
+# sólo progreso, meta y muerte + la recompensa de Santi, en los 5 niveles de Santi
+python scripts/train.py --algos ppo --levels niveles/santi.json --rewards progress win death salto_preciso
+# la de siempre, pero sin castigo por morir
+python scripts/train.py --algos ppo --rewards progress win survive jump_penalty --jump-penalty 0.05
+```
+```python
+train("ppo", levels="niveles/santi.json", rewards=["progress", "win", "death", "salto_preciso"])
+```
+Reglas (se chequean antes de entrenar, con un error claro):
+- `jump_penalty` y `salto_preciso` son **excluyentes**: los dos fijan cuánto cuesta saltar. Tampoco se acepta `salto_preciso` con `--jump-penalty` o `--ramp`.
+- Un parámetro de un término apagado (p. ej. `--death-penalty 5` sin `death` en `--rewards`) es un error, no se ignora en silencio.
+- `--rewards` no se combina con `--reward-fn` (esa ya reemplaza toda la recompensa).
+- Los términos quedan en `config.json` (así `evaluate.py` re-evalúa igual) y en el nombre de la carpeta (`..._rw-progress+win+death+salto_preciso`).
+- `ejemplos/reward_santi.py:salto_preciso` sigue existiendo como `--reward-fn` suelto (la versión original, con `win_bonus=2`).
 
 **Recompensa propia.** Se escribe una función que recibe un `Transition` (qué pasó en el tick) y devuelve un float; se puede
 partir de `default_reward` y modificarla. Cualquier archivo `.py` sirve (ejemplo en `ejemplos/reward_ejemplo.py`):
@@ -116,7 +153,7 @@ python scripts/train.py --algos ppo --reward-fn mi_archivo.py:mi_recompensa
 train("ppo", reward_fn=mi_recompensa)             # o directo: GeometryDashEnv(reward_fn=mi_recompensa)
 ```
 `tr` tiene `prev`/`new` (estados), `status`, `dead`, `won`, `jumped`, `dx`, `d_progress`, `progress` y `level` (detalle en
-`gd_env/rewards.py`). Si hay `reward_fn`, `win_bonus`/`death_penalty`/`progress_scale`/`survive_bonus` no se usan (los
+`gd_env/rewards.py`). Si hay `reward_fn`, `win_bonus`/`death_penalty`/`progress_scale`/`survive_bonus`/`survive_rate` no se usan (los
 reemplaza la función); `jump_penalty` se sigue sumando. La firma vieja `reward_fn(prev, new, status, level)` también funciona.
 En config.json la función queda como `modulo:nombre`: con funciones definidas en un notebook o lambdas, `evaluate.py` no puede
 recargarla y re-evalúa con la recompensa por defecto (sólo cambia la columna `return`).
@@ -127,6 +164,8 @@ Sin penalización el agente aprende a ganar saltando casi sin parar (~27 saltos 
 no le cuesta nada. `--jump-penalty c` resta `c` en cada salto **efectivo** (con el cubo apoyado; apretar en el aire no cuesta).
 `--death-penalty` cambia lo que cuesta morir (por defecto 10, ver `GeometryDashEnv`): tiene que ser alto frente a `c` para que
 el agente prefiera pagar un salto necesario antes que morir.
+`jump_penalty` es uno de los términos de `--rewards` y es **excluyente** con `salto_preciso` (que ya decide cuánto cuesta saltar según el obstáculo):
+con `salto_preciso` no se pueden usar `--jump-penalty` ni `--ramp`.
 
 | Modo | Comando | Qué hace |
 |---|---|---|
@@ -139,17 +178,74 @@ La evolución de `c` queda en `jump_penalty.csv` (paso, `c`, tasa de éxito que 
 episodios de **entrenamiento** (acciones muestreadas, con exploración), más bajos que en la evaluación determinista: por eso el umbral
 por defecto es 80% y no 100%.
 
+### Bonus por seguir vivo (opcional)
+El cubo avanza solo a velocidad constante, así que no puede quedarse quieto: el bonus no premia "esperar", premia **cada
+tramo del nivel que sobrevive**. Sirve para que no haya que retocar `death_penalty`/`win_bonus` al cambiar el largo del nivel:
+el progreso suma 1 en todo el nivel (por tick vale menos cuanto más largo es), pero el costo de saltar crece con el largo; en un
+nivel largo lo que queda por pagar en saltos puede superar lo que queda por ganar y al agente le conviene morir. Un bonus por
+tick crece con el largo igual que los saltos y lo compensa.
+
+| Parámetro | Qué hace |
+|---|---|
+| `--survive-bonus b --survive-interval N` | suma `b` cada `N` ticks vivo (no en el tick en que muere). Tasa por tick = `b / N` |
+| `--survive-rate r --survive-interval N` | igual, pero con tasa por tick = `r × c` (`c` = `jump_penalty` vigente, también con `--ramp`). Necesita `--jump-penalty > 0`. Es alternativa a `--survive-bonus` (pasar las dos da error) |
+
+Regla práctica: la tasa por tick tiene que superar `c × saltos_por_tick` del nivel (así cada tick vivo deja ganancia neta y morir
+nunca conviene). En los niveles registrados el máximo es ~0.056 saltos por tick (`muy_dificil`: 15 saltos en 270 ticks; `level_1`: 13 en 520),
+así que `--survive-rate 0.1` deja margen y no hay que recalcularlo por nivel. Ejemplo: `--jump-penalty 0.05 --survive-rate 0.1 --survive-interval 20`
+da 0.1 × 0.05 × 20 = 0.1 cada 20 ticks. Si armás niveles con más de ~0.06 saltos por tick, subí `r`. Los valores se guardan en `config.json`
+y el run queda con sufijo `_sr0.1_si20` (o `_sb…_si…`).
+
+### Niveles registrados
+Todos viven en `gd_env/levels.py` (registro `LEVELS`), miden 7 de alto y 60 de largo (salvo `level_1`, de 110) y arrancan en `x = 2.0`.
+Los números salen de `python scripts/difficulty.py` (peor caso entre las 10 fases de arranque; ver "Dificultad de un nivel").
+
+| Nivel | Autor | Qué tiene | Saltos mín. | Ventana mín. (ticks) | log10 P(ganar al azar) |
+|---|---|---|---|---|---|
+| `level_1` | TP | pinchos simples y dobles, escalón, pozos, escalera y combos | 13 | 2 | −4.6 |
+| `nacho_facil` | Nacho | escalones de a uno y bajadas, pinchos sueltos | 6 | 7 | −3.7 |
+| `nacho_medio` | Nacho | pozos anchos de 3 tiles e islas donde aterrizar | 8 | 5 | −7.1 |
+| `nacho_dificil` | Nacho | mesetas de altura 3 con pinchos arriba y huecos entre paredes | 12 | 3 | −8.8 |
+| `nacho_muy_dificil` | Nacho | ritmo: pinchos simples y dobles, pozos y una plataforma con pinchos | 14 | 1 | −12.8 |
+| `facil` | Rugo | | 8 | 7 | −6.3 |
+| `medio` | Rugo | | 9 | 3 | −6.8 |
+| `dificil` | Rugo | | 14 | 2 | −8.2 |
+| `muy_dificil` | Rugo | una fila de bloques arriba hace de techo (ver la nota de `features` en "Observaciones y CNN") | 15 | 1 | −10.3 |
+| `muy_muy_dificil` | Rugo | "pixel perfect": ventanas de 1 tick | 12 | 1 | −33.1 |
+| `franco_facil` | Franco | pinchos sueltos y separados, un escalón de 1 y un pozo de 2 | 5 | 8 | −2.0 |
+| `franco_medio` | Franco | doble pincho, plataforma con pincho arriba, escalera, pozo de 3 y pincho al aterrizar | 8 | 3 | −5.1 |
+| `franco_dificil` | Franco | dos dobles pinchos, plataforma entre pozos, escalera con pincho en la cima | 11 | 3 | −10.7 |
+| `franco_techo` | Franco | dos escalones, una plataforma con **pinchos colgantes** (bajo ella saltar mata) y una torre con pincho | 5 | 3 | −17.3 |
+| `franco_rutas` | Franco | **dos rutas**: escalera a una meseta alta con hueco de 3; se puede saltar y seguir arriba (7 saltos) o caer y pasar por el túnel de 1 tile de abajo (5 saltos) | 5 | 7 | −3.1 |
+| `franco_tunel` | Franco | pinchos sueltos, plataforma con pinchos colgantes (hueco de 1 tile: saltar mata), escalón y pozo | 6 | 8 | −11.6 |
+| `franco_pasillos` | Franco | escalera con pincho en la meseta, plataforma alta con pinchos colgantes (hueco de 2) y túnel bajo (hueco de 1), doble pincho y pozo | 8 | 3 | −15.7 |
+| `franco_sin_saltar` | Franco | techo de pinchos colgantes en todo el nivel y piso liso (hueco de 1): se gana **sin saltar nunca**; cualquier salto mata | 0 | — | −80.7 |
+| `santi_facil` | Santi | pinchos simples separados, dos plataformas bajas y un pozo de 2 | 6 | 8 | −3.4 |
+| `santi_intermedio_1` | Santi | pinchos simples y dobles (`^^`), pozos de 2 y 3 | 7 | 1 | −6.7 |
+| `santi_intermedio_2` | Santi | escalón a altura 2 y hasta 3 pinchos seguidos bajando de escalón (`##^^^`) | 9 | 1 | −10.9 |
+| `santi_intermedio_dificil` | Santi | dos rachas de 3 pinchos tras una plataforma y pozos de 3 | 10 | 3 | −11.9 |
+| `santi_dificil` | Santi | meseta de altura 3 con pincho arriba, caída sobre 3 pinchos y combos | 13 | 1 | −14.0 |
+
+Para ver cualquiera en ASCII: `python -c "from gd_env import get_level, to_ascii; print(to_ascii(get_level('franco_techo')))"`.
+
+**Pincho colgante (`v`).** Es un pincho que cuelga de un bloque y apunta hacia abajo; sirve para armar techos peligrosos como el de
+`franco_techo`, `franco_tunel`, `franco_pasillos` y `franco_sin_saltar` (techo de pinchos en todo el nivel: el óptimo es 0 saltos, para probar si el agente aprende a no saltar): con el hueco de 1 tile que deja bajo la plataforma, el cubo pasa caminando pero muere si salta (la cabeza toca la hitbox).
+Su hitbox es la del pincho común espejada (0.3×0.3, en la parte alta del tile) y, como en el resto de los pinchos, rozar la punta no mata.
+En la grilla (`grid`/`dict`) los pinchos hacia arriba y los colgantes comparten el canal de pinchos, así la forma de la observación
+sigue siendo (3, 7, 16) y los modelos ya entrenados se cargan igual; la posición dentro de la grilla los distingue. Los niveles que
+no lo usan se comportan exactamente igual que antes. Se prueba en `tests/test_spike_down.py`.
+
 ### Varios niveles
 `--levels` acepta nombres de niveles registrados en `gd_env.LEVELS` (`gd_env/levels.py`) y/o un archivo `.json`:
 ```bash
 python scripts/train.py --algos ppo --levels niveles/ejemplo.json      # conjunto definido en un archivo
-python scripts/train.py --algos ppo --levels level_1 level_2           # nombres sueltos: peso 1 c/u, validación null
+python scripts/train.py --algos ppo --levels franco_facil franco_medio  # nombres sueltos: peso 1 c/u, validación null
 ```
 ```json
-{"niveles": {"level_1": 1.0, "level_2": 1.0, "level_3": 2.0},
- "validacion": ["level_4", "level_5"]}
+{"niveles": {"franco_facil": 1.0, "franco_medio": 1.0, "franco_dificil": 2.0},
+ "validacion": ["franco_techo"]}
 ```
-- **`niveles`**: nivel → peso (probabilidad relativa de jugarlo en cada episodio; arriba `level_3` sale el doble), o una lista
+- **`niveles`**: nivel → peso (probabilidad relativa de jugarlo en cada episodio; arriba `franco_dificil` sale el doble), o una lista
   de nombres (todos con peso 1). Un peso 0 deja el nivel cargado sin jugarse.
 - **`validacion`**: niveles que **no** se usan para entrenar (held out):
   - un nombre o una lista de nombres: esos niveles;
@@ -163,10 +259,35 @@ python scripts/train.py --algos ppo --levels level_1 level_2           # nombres
   con prefijo `val_`. `resumen.md` trae tablas de entrenamiento y de validación.
 - **Historial de validación**: las evaluaciones periódicas también miden los niveles de validación (columnas `val_success`,
   `val_progress`, `val_mean_jumps_won` de `eval_history.csv`), pero el **mejor modelo se elige sólo con los de entrenamiento**.
+  Además hay una columna de éxito por nivel (`success_<nivel>`, `val_success_<nivel>`): sirve para ver si olvida alguno.
+  `monitor/*.csv` registra en la columna `level` qué nivel se jugó en cada episodio de entrenamiento.
 - `config.json` guarda lo pedido (`levels`, `val_seed`) y lo que resultó (`train_levels` con pesos, `val_levels`, `val_held_out`);
   `scripts/evaluate.py` lo usa para re-evaluar con los mismos niveles. Las corridas viejas (sin niveles) siguen funcionando con `level_1`.
 - Los pesos se pueden cambiar durante el entrenamiento (`env_method("set_wrapper_attr", "level_weights", [...])`), igual que la
-  penalización por salto: es la base para una futura rampa que agregue niveles más difíciles de a poco.
+  penalización por salto: es lo que usa la progresión de niveles (abajo).
+
+#### Progresión de niveles (introducirlos de a poco)
+Opcional, en el mismo `.json` (en la literatura se llama *curriculum learning*). Ejemplo: `niveles/nacho_progresion.json`.
+```json
+{"niveles": ["nacho_facil", "nacho_medio", "nacho_dificil", "nacho_muy_dificil"],
+ "validacion": "level_1",
+ "progresion": {"etapas": [["nacho_facil"], ["nacho_medio"], ["nacho_dificil", "nacho_muy_dificil"]],
+                "desbloquear": 0.8, "ventana": 50, "piso": 0.2}}
+```
+- **`etapas`**: cualquier cantidad, cada una con uno o más niveles; cada nivel de entrenamiento tiene que estar en exactamente una.
+  Se arranca sólo con la primera; las demás tienen peso 0 hasta desbloquearse.
+- **Desbloqueo**: cuando **todos** los niveles activos ganan al menos `desbloquear` (80%) de sus últimos `ventana` (50) episodios
+  de entrenamiento, se suma la etapa siguiente.
+- **Pesos según el desempeño**: cada nivel activo pesa `peso_base × max(piso, 1 − éxito_reciente)`. Se practica más lo que más falla;
+  un nivel recién desbloqueado entra con el peso máximo; uno dominado baja hasta `piso` pero nunca a 0, así se sigue repasando, y si el
+  agente lo olvida su peso vuelve a subir solo (evita el *olvido catastrófico*). Los pesos de `niveles` multiplican a este peso.
+- `desbloquear`, `ventana` y `piso` son opcionales (valores por defecto los de arriba). Si `validacion` saca un nivel que estaba en una
+  etapa, se lo quita de ella. El callback es `LevelProgression` (`agents/callbacks.py`); cada cambio de etapa (y, cada `ventana`
+  episodios, los pesos y el éxito por nivel) queda en `progresion.csv`. El nombre de la corrida suma `_prog`.
+- Con `--init-model` la progresión vuelve a empezar desde la primera etapa. Combinada con `--ramp`, cada nivel nuevo baja la tasa de
+  éxito y la rampa puede aflojar `c` un rato.
+- Se combina con los términos de la recompensa (`--rewards`), que valen igual en todas las etapas. Para armar una progresión con otros
+  niveles (por ejemplo los de Santi) alcanza con copiar `niveles/nacho_progresion.json` y cambiar `niveles`, `validacion` y `etapas`.
 
 ### Qué se guarda
 ```
@@ -181,6 +302,7 @@ runs/<run-name>/
     ├── eval_fases.csv       evaluación del modelo final  ·  eval_fases_best.csv  del mejor modelo  ·  *_val.csv: en los niveles de validación
     ├── monitor/             un CSV por entorno con cada episodio de entrenamiento
     ├── jump_penalty.csv     evolución de c (sólo con --ramp)
+    ├── progresion.csv       etapas, pesos y éxito por nivel (sólo con "progresion" en el .json de niveles)
     └── episodio_<nivel>_x0_*.gif, *_recorrido.png  (final)  ·  mejor_episodio_*  (mejor)  ·  val_*  (niveles de validación)
 ```
 - **Mejor modelo**: cada `--eval-freq` pasos (25k; `0` lo desactiva) y al terminar se evalúa el modelo de forma determinista en las
@@ -256,13 +378,17 @@ Cada fila de `evaluate_policy_phases` tiene: `level, x0, success, progress, retu
 - Los modelos con CNN se guardan igual (`model.zip`) y se recargan con `load_model`; hace falta poder importar `agents.cnn`, o sea correr desde la raíz del repo.
 - Desde Python: `env = make_train_env("grid", n_envs=8, seed=0, random_phase=False)` y `model = build_model("ppo", env, seed=0, obs_mode="grid")` (con `"dict"` es igual). Evaluar: `evaluate_policy_phases(model, "grid")`.
 - Con CNN el entrenamiento es más lento que con `features` (más parámetros por paso); en CPU, DQN/QR-DQN son los más lentos.
+- **Limitación de `features` con techos.** De cada columna sólo ve la altura del bloque **más alto** y si hay un pincho (hacia arriba o
+  colgante). Con un techo o una plataforma sobre el cubo (`muy_dificil`, `franco_techo`) esa altura es la del techo: no ve el piso de
+  abajo, el hueco libre ni si el pincho cuelga o está en el piso. `grid` y `dict` sí ven todos los bloques. Que el agente aprenda o no
+  esos niveles con cada observación hay que medirlo (misma seed y pasos, `features` contra `grid`); no está medido todavía.
 
 ## Decisiones de diseño
 - **Un tick = un paso**; velocidad horizontal constante (0.2 tiles/tick), así el nivel dura 520 pasos.
 - **Acción**: 0 = nada, 1 = saltar (sólo surte efecto apoyado; equivale a mantener apretado).
-- **Muerte**: choque de costado con un bloque, pincho (hitbox 0.3×0.3), o caer a un pozo.
-- **Observación `grid`**: (3, 7, 16) = bloques / pinchos / jugador, ventana ego-céntrica. No incluye la velocidad vertical; por eso existe `dict` (grilla + vector).
-- **Recompensa por defecto**: progreso (suma 1 en el nivel) + 1 al ganar − 10 al morir (`death_penalty`). Reemplazable con `reward_fn(tr)` (ver "Recompensa y `train()`") para la curva de timing del profesor.
+- **Muerte**: choque de costado con un bloque, pincho (hitbox 0.3×0.3; el colgante `v` la tiene espejada), o caer a un pozo. Golpear un bloque con la cabeza no mata: sólo frena la subida.
+- **Observación `grid`**: (3, 7, 16) = bloques / pinchos / jugador, ventana ego-céntrica. No incluye la velocidad vertical; por eso existe `dict` (grilla + vector). Los pinchos colgantes van en el mismo canal que los demás.
+- **Recompensa por defecto**: progreso (suma 1 en el nivel) + 1 al ganar − 10 al morir (`death_penalty`). Está hecha de términos (`progress`, `win`, `death`, `survive`, `jump_penalty`, `salto_preciso`) que se prenden y apagan con `--rewards`, o se reemplaza entera con `reward_fn(tr)` (ver "Recompensa y `train()`") para la curva de timing del profesor.
 - `reset(options={"x0": ...})` cambia la fase de arranque: sirve para evaluar generalización sobre variaciones del nivel fijo. Probado con 20 fases: todas tienen solución.
 
 ## Oráculo
@@ -297,7 +423,7 @@ camino óptimo salto por salto (despegando en el centro de cada ventana) y mide:
 
 Cada columna es el **peor caso** entre las 10 fases de arranque de la evaluación (`--fases 1`: sólo x0 = 2.0). Con `--detalle`, por
 cada salto: dónde está la ventana, cuántas trampas tiene y, si está encadenado, entre cuánto y cuánto varía la ventana del siguiente.
-Funciona con cualquier nivel dibujable en ASCII, también con techos o plataformas flotantes (la física ya resuelve los cabezazos).
+Funciona con cualquier nivel dibujable en ASCII, también con techos, plataformas flotantes y pinchos colgantes (la física ya resuelve los cabezazos).
 
 **`level_1`**: 13 saltos; ventanas de 2 a 10 ticks (media 6.3). Las más chicas: el salto desde la plataforma baja al pozo (x≈78,
 2 ticks) y los pinchos dobles (x≈23 y x≈65, 3 ticks). Tiene 3 saltos con trampas (escalón x≈31, escalera x≈49, plataforma baja

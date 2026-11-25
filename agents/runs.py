@@ -13,7 +13,7 @@ from .evaluate import evaluate_policy_phases, save_rows
 OUTPUT_TAGS = {"model": ("", ""), "best_model": ("_best", "mejor_")}
 
 
-REWARD_PARAMS = ("jump_penalty", "death_penalty", "win_bonus", "progress_scale", "survive_bonus")
+REWARD_PARAMS = ("jump_penalty", "death_penalty", "win_bonus", "progress_scale", "survive_bonus", "survive_interval", "survive_rate")
 
 
 def reward_kwargs(cfg: dict) -> dict:
@@ -22,6 +22,8 @@ def reward_kwargs(cfg: dict) -> dict:
     texto ``'modulo:funcion'`` (como queda en config.json)."""
     kwargs = {"jump_penalty": cfg.get("jump_penalty") or 0.0}
     kwargs.update({k: cfg[k] for k in REWARD_PARAMS[1:] if cfg.get(k) is not None})
+    if cfg.get("rewards") is not None:      # términos prendidos (config.json de una corrida con --rewards)
+        kwargs["rewards"] = list(cfg["rewards"])
     if cfg.get("reward_fn") is not None:
         try:
             kwargs["reward_fn"] = load_reward_fn(cfg["reward_fn"])

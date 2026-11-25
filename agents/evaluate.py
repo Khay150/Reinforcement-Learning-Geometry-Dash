@@ -52,6 +52,12 @@ def metrics(rows: list[dict]) -> dict:
             "mean_jumps_won": float(np.mean(won)) if won else None}
 
 
+def success_by_level(rows: list[dict]) -> dict:
+    """Fracción de fases ganadas en cada nivel: ``{"success_<nivel>": ...}`` (para ver si olvida alguno)."""
+    levels = dict.fromkeys(r["level"] for r in rows)
+    return {f"success_{lv}": float(np.mean([r["success"] for r in rows if r["level"] == lv])) for lv in levels}
+
+
 def describe(rows: list[dict]) -> str:
     """Una línea legible con el resultado de una evaluación (con varios niveles, agrega las fases ganadas por nivel)."""
     m = metrics(rows)

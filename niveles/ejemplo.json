@@ -4,9 +4,28 @@
     "niveles: {nombre: peso} (probabilidad relativa de jugar cada nivel) o una lista de nombres (todos con peso 1).",
     "validacion: nombre o lista de nombres (held out: no se entrena en ellos), un número N (sortea N de 'niveles' y los",
     "saca del entrenamiento; reproducible con --val-seed) o null (valida en uno de los de entrenamiento, al azar).",
-    "Ejemplo con varios niveles: {\"niveles\": {\"level_1\": 1.0, \"level_2\": 1.0, \"level_3\": 2.0}, \"validacion\": [\"level_4\", \"level_5\"]}",
-    "Los nombres tienen que estar registrados en gd_env.LEVELS (gd_env/levels.py). Hoy sólo existe level_1."
+    "Ejemplo con niveles reservados: \"validacion\": [\"franco_techo\", \"muy_dificil\"] (esos dos dejan de entrenarse).",
+    "Los nombres tienen que estar registrados en gd_env.LEVELS (gd_env/levels.py). Hoy hay 17 (los de abajo); la tabla con",
+    "autor, contenido y dificultad está en \"Niveles registrados\" del README, y 'python scripts/difficulty.py' la recalcula."
   ],
-  "niveles": {"level_1": 1.0},
+  "niveles": {
+    "level_1": 1.0,
+    "nacho_facil": 1.0,
+    "nacho_medio": 1.0,
+    "nacho_dificil": 1.0,
+    "nacho_muy_dificil": 1.0,
+    "facil": 1.0,
+    "medio": 1.0,
+    "dificil": 1.0,
+    "muy_dificil": 1.0,
+    "muy_muy_dificil": 1.0,
+    "franco_facil": 1.0,
+    "franco_medio": 1.0,
+    "franco_dificil": 1.0,
+    "franco_techo": 1.0,
+    "franco_rutas": 1.0,
+    "franco_tunel": 1.0,
+    "franco_pasillos": 1.0
+  },
   "validacion": null
 }

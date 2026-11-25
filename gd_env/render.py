@@ -39,6 +39,8 @@ def _draw_tiles(d: ImageDraw.ImageDraw, level: Level, c_from: int, c_to: int, ce
             y0 = (H - 1 - r) * cell
             if t == ph.BLOCK:
                 d.rectangle([px, y0, px + cell - 1, y0 + cell - 1], fill=BLOCK_FILL, outline=BLOCK_EDGE)
+            elif t == ph.SPIKE_DOWN:
+                d.polygon([(px + 2, y0 + 1), (px + cell - 3, y0 + 1), (px + cell / 2, y0 + cell - 4)], fill=SPIKE_COL)
             else:
                 d.polygon([(px + 2, y0 + cell - 1), (px + cell / 2, y0 + 3), (px + cell - 3, y0 + cell - 1)], fill=SPIKE_COL)
 

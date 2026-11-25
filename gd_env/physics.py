@@ -25,7 +25,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-EMPTY, BLOCK, SPIKE = 0, 1, 2
+EMPTY, BLOCK, SPIKE, SPIKE_DOWN = 0, 1, 2, 3     # SPIKE_DOWN: pincho colgando de un bloque (apunta hacia abajo)
 
 # Estados posibles de un tick (el ``status`` que devuelve ``step``). OK = sigue vivo; CRASH / SPIKE_HIT / FELL = murió
 # (choque de costado, pincho, caída a un pozo); WIN = llegó a la meta. Todos menos OK terminan el episodio.
@@ -72,6 +72,7 @@ class Level:
         self.name = name
         # Posiciones de los pinchos precalculadas: las colisiones con pinchos se consultan en cada tick.
         self._spikes = {(int(r), int(c)) for r, c in zip(*np.nonzero(self.grid == SPIKE))}
+        self._spikes_down = {(int(r), int(c)) for r, c in zip(*np.nonzero(self.grid == SPIKE_DOWN))}
 
     def tile(self, row: int, col: int) -> int:
         if 0 <= row < self.height and 0 <= col < self.length:
@@ -86,7 +87,8 @@ class Level:
         return int(rows.max()) + 1 if rows.size else 0
 
     def has_spike(self, col: int) -> bool:
-        return 0 <= col < self.length and bool((self.grid[:, col] == SPIKE).any())
+        """¿Hay un pincho (hacia arriba o hacia abajo) en la columna?"""
+        return 0 <= col < self.length and bool(np.isin(self.grid[:, col], (SPIKE, SPIKE_DOWN)).any())
 
 
 def initial_state(level: Level, p: Physics, x0: float | None = None) -> State:
@@ -112,13 +114,17 @@ def _solid_tiles(level: Level, p: Physics, x: float, y: float) -> list[tuple[int
 
 def _spike_hit(level: Level, p: Physics, x: float, y: float) -> bool:
     """¿El cubo en (x, y) toca la hitbox de algún pincho? La hitbox es más chica que el tile (``spike_w`` x ``spike_h``)
-    y está centrada: así rozar la punta no mata, como en el juego."""
+    y está centrada: así rozar la punta no mata, como en el juego. En un pincho hacia arriba (``SPIKE``) la hitbox va
+    en la parte baja del tile; en uno colgante (``SPIKE_DOWN``), en la parte alta (es el mismo pincho espejado)."""
     e = p.eps
     lo, hi = (1 - p.spike_w) / 2, (1 + p.spike_w) / 2
     for c in range(math.floor(x), math.floor(x + 1) + 1):
         for r in range(max(math.floor(y), 0), math.floor(y + 1) + 1):
             if (r, c) in level._spikes:
                 if x < c + hi - e and x + 1 > c + lo + e and y < r + p.spike_h - e and y + 1 > r + e:
+                    return True
+            if (r, c) in level._spikes_down:
+                if x < c + hi - e and x + 1 > c + lo + e and y < r + 1 - e and y + 1 > r + 1 - p.spike_h + e:
                     return True
     return False
 

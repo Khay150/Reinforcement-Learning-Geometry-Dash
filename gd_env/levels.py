@@ -1,13 +1,17 @@
 """Niveles del TP (deterministas, exportables a ASCII) y conjuntos de niveles para entrenar.
 
-Leyenda: '#' bloque sólido, '^' pincho, '.' vacío. La última línea es el piso
-(fila 0); un '.' en esa línea es un pozo.
+Leyenda: '#' bloque sólido, '^' pincho, 'v' pincho colgante (cuelga de un bloque, apunta hacia abajo), '.' vacío.
+La última línea es el piso (fila 0); un '.' en esa línea es un pozo.
 
 Para entrenar con varios niveles, ``resolve_levels`` traduce lo que se pasa a ``--levels`` (nombres de ``LEVELS``
 y/o un archivo ``.json``) en los niveles de entrenamiento con su peso y los de validación. Formato del ``.json``::
 
     {"niveles": {"level_1": 1.0, "level_2": 2.0},     # o una lista de nombres (todos con peso 1)
-     "validacion": ["level_3"]}                        # nombre(s), un número (cuántos sortear) o null
+     "validacion": ["level_3"],                        # nombre(s), un número (cuántos sortear) o null
+     "progresion": {"etapas": [["level_1"], ["level_2"]],   # opcional: introducir los niveles de a poco
+                    "desbloquear": 0.8, "ventana": 50, "piso": 0.2}}
+
+La ``progresion`` (en la literatura, *curriculum learning*) la ejecuta ``agents.callbacks.LevelProgression``.
 """
 from __future__ import annotations
 
@@ -16,9 +20,9 @@ from pathlib import Path
 
 import numpy as np
 
-from .physics import BLOCK, EMPTY, SPIKE, Level
+from .physics import BLOCK, EMPTY, SPIKE, SPIKE_DOWN, Level
 
-_CHARS = {".": EMPTY, "#": BLOCK, "^": SPIKE}      # carácter ASCII -> tipo de tile
+_CHARS = {".": EMPTY, "#": BLOCK, "^": SPIKE, "v": SPIKE_DOWN}      # carácter ASCII -> tipo de tile
 
 
 def parse_level(ascii_map: str, start_x: float = 2.0, goal_margin: int = 4, name: str = "ascii") -> Level:
@@ -183,6 +187,186 @@ def nacho_muy_dificil() -> Level:
 """, name="nacho_muy_dificil")
 
 
+def franco_facil() -> Level:
+    """Pinchos sueltos y bien separados, un escalón de 1 y un pozo de 2 tiles. 5 saltos mínimos."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+............................................................
+............................................................
+.............^.........^......^.......####..................
+################################################..##########
+""", name="franco_facil")
+
+
+def franco_medio() -> Level:
+    """Doble pincho, plataforma de 2 con un pincho arriba, escalera de 2 pasos, un pincho suelto y un pozo de 3 con un
+    pincho justo después del aterrizaje. 8 saltos mínimos."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+............................................................
+........................^..........###......................
+.............^^.......####......######.....^........^.......
+##############################################...###########
+""", name="franco_medio")
+
+
+def franco_dificil() -> Level:
+    """Doble pincho, plataforma con pincho arriba entre pozos, escalera de 2 pasos con un pincho en la cima, otro doble
+    pincho y un pozo seguido de pincho y escalón. 11 saltos mínimos, ventana mínima de 3 ticks y cadenas de hasta 6 saltos."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+....................................^.......................
+......................^...........###.......................
+.............^^.....####.......######....^^.......^...##....
+##########################...################..#############
+""", name="franco_dificil")
+
+
+def franco_techo() -> Level:
+    """Obstáculo en el medio: dos escalones, una plataforma con pinchos colgando de abajo (el hueco libre es de 1 tile: ahí
+    saltar mata, hay que cruzar sin apretar) y una torre con un pincho encima. 5 saltos mínimos. Usa el pincho colgante 'v'."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+............................#########.......................
+...................##.......vvvvvvvvv..........^............
+..........^...###..##.........................##............
+############################################################
+""", name="franco_techo")
+
+
+def franco_rutas() -> Level:
+    """Dos rutas: una escalera de 2 pasos sube a una meseta alta; al final de la meseta hay un hueco de 3 tiles y la
+    plataforma alta sigue (con un pincho encima). El cubo puede saltar el hueco y seguir por arriba, o dejarse caer al
+    piso y pasar caminando por el túnel de 1 tile que queda debajo. Ambas rutas ganan (abajo 5 saltos, arriba 7).
+    Con `features` las dos rutas se ven igual (sólo se ve el bloque más alto de cada columna)."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+...................................^........................
+................##########...##############.................
+........^....#####.............................^....###.....
+############################################################
+""", name="franco_rutas")
+
+
+def franco_tunel() -> Level:
+    """Obstáculo en el medio: pinchos sueltos, una plataforma con pinchos colgando de abajo (hueco libre de 1 tile: ahí
+    saltar mata), un pincho antes y otro después, un escalón y un pozo. 6 saltos mínimos."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+....................########................................
+.....................vvvvv..................................
+............^....^..............^.....###.....^.............
+##################################################..########
+""", name="franco_tunel")
+
+
+def franco_pasillos() -> Level:
+    """Dos pasillos con pinchos colgantes: la escalera sube a una meseta con pincho; después una plataforma alta (hueco
+    libre de 2 tiles, se puede saltar pero hay pinchos en el piso) y un túnel bajo (hueco de 1 tile, saltar mata);
+    cierra con un doble pincho y un pozo. 8 saltos mínimos."""
+    return parse_level("""
+............................................................
+............................................................
+............................########........................
+...................^.........vvvvv......########............
+................#####....................vvvvvv.............
+........^....######.....^^.....^......^.............^^......
+#########################################################..#
+""", name="franco_pasillos")
+
+
+def franco_sin_saltar() -> Level:
+    """Techo de pinchos colgantes en todo el nivel y piso liso: el hueco libre es de 1 tile, así que ganar es **no saltar nunca**
+    (0 saltos mínimos; cualquier salto mata contra los pinchos). Sirve para ver si el agente aprende a quedarse quieto
+    cuando saltar no conviene, aun con penalización por salto."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+############################################################
+vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+............................................................
+############################################################
+""", name="franco_sin_saltar")
+
+
+def santi_facil() -> Level:
+    """Fácil (60 cols, 6 saltos): pinchos simples separados, dos plataformas bajas y un pozo de 2."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+............................................................
+............................................................
+.........^............####.........^..........###.....^.....
+#######################################..###################
+""", name="santi_facil")
+
+
+def santi_intermedio_1() -> Level:
+    """Intermedio 1 (60 cols, 7 saltos): combina pinchos simples con 2 pinchos dobles (^^) y pozos de 2 y 3."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+............................................................
+............................................................
+.......^.......^^.......####.......^....^^........###.......
+##############################...##############..###########
+""", name="santi_intermedio_1")
+
+
+def santi_intermedio_2() -> Level:
+    """Intermedio 2 (60 cols, 9 saltos): escalón a altura 2 y el máximo de 3 pinchos seguidos bajando de escalón (##^^^)."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+............................................................
+.....................###....................................
+......^^.......###...###.....^^........##^^^.........^^.....
+############...###...###...######...######################..
+""", name="santi_intermedio_2")
+
+
+def santi_intermedio_dificil() -> Level:
+    """Intermedio-Difícil (60 cols, 10 saltos): dos rachas de 3 pinchos seguidos tras plataforma (####^^^ y ###^^^) + pozos de 3."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+............................................................
+.....................####...................###.............
+......^^..........######^^^.....^^.......#####^^^....^^.....
+###########...################################...###########
+""", name="santi_intermedio_dificil")
+
+
+def santi_dificil() -> Level:
+    """Difícil (60 cols, 13 saltos): meseta de altura 3 con pincho arriba + caída sobre 3 pinchos (######^^^) y combos."""
+    return parse_level("""
+............................................................
+............................................................
+............................................................
+........................^...................................
+.....................######^^^..............###.............
+.....^^...........#########.........^^...#####^^^....^^.....
+##########...#####################..##############..########
+""", name="santi_dificil")
+
+
 # Niveles disponibles por nombre (lo que se escribe en --levels o en el .json de niveles).
 # Todos tienen que tener la misma altura (la forma de la observación depende de ella) y arrancar en x = 2.0.
 LEVELS = {
@@ -196,6 +380,19 @@ LEVELS = {
     "dificil": level_dificil,
     "muy_dificil": level_muy_dificil,
     "muy_muy_dificil": level_muy_muy_dificil,
+    "franco_facil": franco_facil,
+    "franco_medio": franco_medio,
+    "franco_dificil": franco_dificil,
+    "franco_techo": franco_techo,
+    "franco_rutas": franco_rutas,
+    "franco_tunel": franco_tunel,
+    "franco_pasillos": franco_pasillos,
+    "franco_sin_saltar": franco_sin_saltar,
+    "santi_facil": santi_facil,
+    "santi_intermedio_1": santi_intermedio_1,
+    "santi_intermedio_2": santi_intermedio_2,
+    "santi_intermedio_dificil": santi_intermedio_dificil,
+    "santi_dificil": santi_dificil,
 }
 
 
@@ -216,6 +413,29 @@ def read_level_file(path: str | Path) -> tuple[dict[str, float], object]:
     return {k: float(v) for k, v in levels.items()}, data.get("validacion")
 
 
+# Valores por defecto de la progresión (los que no se escriben en el .json).
+PROGRESSION_DEFAULTS = {"desbloquear": 0.8, "ventana": 50, "piso": 0.2}
+
+
+def _check_progression(prog: dict, train: dict[str, float], val_names: list[str]) -> dict:
+    """Valida el bloque ``progresion`` contra los niveles de entrenamiento y completa los valores por defecto.
+    Los niveles que quedaron para validación se sacan de las etapas (y las etapas vacías se descartan)."""
+    unknown = set(prog) - {"etapas", *PROGRESSION_DEFAULTS} - {k for k in prog if k.startswith("_")}
+    if unknown:
+        raise ValueError(f"progresion: claves desconocidas {sorted(unknown)}")
+    stages = [[n for n in stage if n not in val_names] for stage in prog["etapas"]]
+    stages = [stage for stage in stages if stage]
+    listed = [n for stage in stages for n in stage]
+    if sorted(listed) != sorted(train) or len(set(listed)) != len(listed):
+        raise ValueError(f"progresion: cada nivel de entrenamiento tiene que estar en exactamente una etapa "
+                         f"(niveles: {sorted(train)}; en las etapas: {listed})")
+    out = {"etapas": stages, **PROGRESSION_DEFAULTS, **{k: prog[k] for k in PROGRESSION_DEFAULTS if k in prog}}
+    if not 0 < out["desbloquear"] <= 1 or not 0 < out["piso"] <= 1 or int(out["ventana"]) < 1:
+        raise ValueError("progresion: desbloquear y piso tienen que estar en (0, 1] y ventana >= 1")
+    out["ventana"] = int(out["ventana"])
+    return out
+
+
 def resolve_levels(spec: list[str] | str | None, val_seed: int = 0) -> dict:
     """Resuelve ``--levels`` en niveles de entrenamiento (con peso) y de validación.
 
@@ -224,11 +444,12 @@ def resolve_levels(spec: list[str] | str | None, val_seed: int = 0) -> dict:
       * nombre o lista de nombres -> esos niveles quedan fuera del entrenamiento (held out);
       * un número n               -> se sortean n niveles de entrenamiento y se sacan del entrenamiento;
       * null (o sin .json)        -> no se reserva ninguno: se valida en uno de entrenamiento elegido al azar.
+    ``progresion`` (opcional, de un .json): etapas para introducir los niveles de a poco (ver ``_check_progression``).
     El sorteo usa ``val_seed``, así es reproducible. Devuelve
-    ``{"train": {nombre: peso}, "val": [nombres], "held_out": bool}``.
+    ``{"train": {nombre: peso}, "val": [nombres], "held_out": bool, "progression": dict | None}``.
     """
     spec = ["level_1"] if not spec else [spec] if isinstance(spec, str) else list(spec)
-    train, val = {}, None
+    train, val, prog = {}, None, None
     for item in spec:
         if item.endswith(".json"):
             weights, v = read_level_file(item)
@@ -237,6 +458,11 @@ def resolve_levels(spec: list[str] | str | None, val_seed: int = 0) -> dict:
                 if val is not None:
                     raise ValueError("más de un .json define 'validacion'")
                 val = v
+            p = json.loads(Path(item).read_text()).get("progresion")
+            if p is not None:
+                if prog is not None:
+                    raise ValueError("más de un .json define 'progresion'")
+                prog = p
         else:
             train[item] = 1.0
     rng = np.random.default_rng(val_seed)
@@ -254,4 +480,6 @@ def resolve_levels(spec: list[str] | str | None, val_seed: int = 0) -> dict:
         get_level(name)                                   # falla ya si algún nombre no existe
     if not train or sum(train.values()) <= 0:
         raise ValueError("no quedan niveles de entrenamiento con peso > 0")
-    return {"train": train, "val": val_names, "held_out": held_out}
+    if prog is not None:
+        prog = _check_progression(prog, train, val_names)
+    return {"train": train, "val": val_names, "held_out": held_out, "progression": prog}

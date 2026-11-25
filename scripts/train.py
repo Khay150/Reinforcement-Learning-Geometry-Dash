@@ -10,6 +10,8 @@ Ejemplos
   python scripts/train.py --algos ppo --jump-penalty 0.1 --ramp                       # penalización por salto con rampa
   python scripts/train.py --algos ppo --win-bonus 2 --death-penalty 5 --jump-penalty 0.05   # parámetros de la recompensa
   python scripts/train.py --algos ppo --reward-fn ejemplos/reward_ejemplo.py:penaliza_saltos   # recompensa propia
+  python scripts/train.py --algos ppo --rewards progress win death salto_preciso --levels niveles/santi.json
+                                                                                     # términos de la recompensa a elección
   python scripts/train.py --algos ppo --seeds 0 --timesteps 200000 --init-model runs/X/ppo/seed0/best_model.zip
   python scripts/train.py --algos ppo --levels niveles/ejemplo.json                   # varios niveles + validación
   python scripts/train.py --algos ppo --levels level_1 level_2                        # nombres sueltos (peso 1 c/u)
@@ -26,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))     # raíz del repo en el path: así se importan gd_env y agents
 
 from agents import ALGOS, train
+from gd_env import REWARD_TERMS
 
 
 def parse_args():
@@ -56,7 +59,16 @@ def parse_args():
     g.add_argument("--death-penalty", type=float, default=None, help="penalización al morir (def. 10)")
     g.add_argument("--win-bonus", type=float, default=None, help="premio al llegar a la meta (def. 1)")
     g.add_argument("--progress-scale", type=float, default=None, help="lo que vale cruzar todo el nivel (def. 1)")
-    g.add_argument("--survive-bonus", type=float, default=None, help="bonus por tick vivo (def. 0)")
+    g.add_argument("--survive-bonus", type=float, default=None, help="bonus por supervivencia (def. 0)")
+    g.add_argument("--survive-interval", type=int, default=None,
+                   help="el bonus se da cada N ticks vivo (def. 1 = todos los ticks); p. ej. --survive-bonus 0.01 --survive-interval 20")
+    g.add_argument("--survive-rate", type=float, default=None,
+                   help="alternativa a --survive-bonus: bonus por tick = RATE x jump-penalty (p. ej. 0.1); sigue a la rampa y "
+                        "no hay que recalcularlo al cambiar de nivel o de --jump-penalty")
+    g.add_argument("--rewards", nargs="+", default=None, choices=list(REWARD_TERMS), metavar="TERMINO",
+                   help="términos de la recompensa que quedan prendidos (def.: progress win death survive jump_penalty). "
+                        f"Opciones: {', '.join(REWARD_TERMS)}. 'jump_penalty' y 'salto_preciso' son excluyentes. "
+                        "No se combina con --reward-fn")
     g.add_argument("--reward-fn", default=None, metavar="ARCHIVO.py:FUNCION",
                    help="recompensa propia, p. ej. ejemplos/reward_ejemplo.py:penaliza_saltos (o paquete.modulo:funcion). "
                         "Reemplaza a la de por defecto (--jump-penalty se sigue sumando). Ver gd_env/rewards.py")
