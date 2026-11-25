@@ -328,3 +328,113 @@ def test_continue_training_from_saved_model(tmp_path, algo):
         assert cont.exploration_schedule(1.0) == pytest.approx(cont.exploration_final_eps)  # no vuelve a ε=1
     cont.learn(total_timesteps=600)
     assert cont.num_timesteps >= 600
+
+
+# ------------------------------------------------------------------ varios niveles
+def mini_levels():
+    """Dos niveles chicos (misma altura que level_1) para probar el modo multinivel."""
+    from gd_env import build_level
+    return (build_level(length=40, height=7, spikes=[14], name="mini_a"),
+            build_level(length=50, height=7, spikes=[20], pits=[(30, 2)], name="mini_b"))
+
+
+@pytest.fixture
+def registered_minis(monkeypatch):
+    """Registra los niveles chicos en gd_env.LEVELS sólo durante el test."""
+    a, b = mini_levels()
+    monkeypatch.setitem(gd_env.LEVELS, "mini_a", lambda: mini_levels()[0])
+    monkeypatch.setitem(gd_env.LEVELS, "mini_b", lambda: mini_levels()[1])
+    return a, b
+
+
+def test_all_registered_levels_solvable_from_eval_phases():
+    """Cada nivel de gd_env.LEVELS se gana con el oráculo desde todas las fases de evaluación."""
+    from agents.common import EVAL_PHASES
+    from agents.evaluate import oracle_jumps
+    for name in gd_env.LEVELS:
+        lv = gd_env.get_level(name)
+        assert lv.height == level_1().height and lv.start_x == 2.0, name
+        for x0 in EVAL_PHASES:
+            assert oracle_jumps(lv, x0) > 0, f"{name} sin solución desde x0={x0}"
+
+
+def test_env_samples_levels_by_weight():
+    a, b = mini_levels()
+    env = GeometryDashEnv(level=[a, b], level_weights=[1.0, 3.0], obs_mode="features")
+    env.reset(seed=0)
+    names = [env.reset()[1]["level"] for _ in range(400)]
+    assert 0.65 < names.count("mini_b") / 400 < 0.85                 # peso 3 de 4
+    env.level_weights = [1.0, 0.0]                                    # peso 0: no se juega (se puede cambiar en caliente)
+    assert {env.reset()[1]["level"] for _ in range(50)} == {"mini_a"}
+    # forzar un nivel por nombre o índice; max_steps sigue al largo de cada nivel
+    _, info = env.reset(options={"level": "mini_b"})
+    assert info["level"] == "mini_b" and env.max_steps == int(np.ceil((b.goal_x - b.start_x) / env.p.vx) * 1.5)
+    assert env.reset(options={"level": 0})[1]["level"] == "mini_a"
+    with pytest.raises(ValueError):
+        env.reset(options={"level": "no_existe"})
+    with pytest.raises(ValueError):                                   # alturas distintas: la observación cambiaría
+        GeometryDashEnv(level=[a, gd_env.build_level(length=40, height=5, name="bajo")])
+
+
+def test_oracle_policy_follows_level_changes():
+    a, b = mini_levels()
+    env = GeometryDashEnv(level=[a, b], obs_mode="features")
+    pol = OraclePolicy(env)
+    for name in ("mini_a", "mini_b", "mini_a"):
+        info, _ = run(env, lambda o, e: pol.predict()[0], options={"level": name})
+        assert info["success"] and info["level"] == name
+
+
+def test_resolve_levels(registered_minis, tmp_path):
+    import json
+    from gd_env import resolve_levels
+    assert resolve_levels(None) == {"train": {"level_1": 1.0}, "val": ["level_1"], "held_out": False}
+    names = resolve_levels(["level_1", "mini_a"], val_seed=0)            # nombres sueltos: validación null
+    assert names["train"] == {"level_1": 1.0, "mini_a": 1.0} and not names["held_out"]
+    assert names["val"][0] in names["train"]
+
+    def spec(niveles, validacion):
+        f = tmp_path / f"set{len(list(tmp_path.iterdir()))}.json"
+        f.write_text(json.dumps({"_nota": "se ignora", "niveles": niveles, "validacion": validacion}))
+        return str(f)
+
+    fixed = resolve_levels([spec({"level_1": 1, "mini_a": 2, "mini_b": 1}, "mini_b")])
+    assert fixed == {"train": {"level_1": 1.0, "mini_a": 2.0}, "val": ["mini_b"], "held_out": True}
+    lst = resolve_levels([spec(["level_1", "mini_a"], ["mini_b"])])
+    assert lst["train"] == {"level_1": 1.0, "mini_a": 1.0} and lst["val"] == ["mini_b"]
+    drawn = [resolve_levels([spec(["level_1", "mini_a", "mini_b"], 1)], val_seed=s) for s in (0, 0, 1, 2, 3)]
+    assert drawn[0] == drawn[1]                                          # reproducible con la misma semilla
+    for d in drawn:
+        assert len(d["val"]) == 1 and d["held_out"] and d["val"][0] not in d["train"] and len(d["train"]) == 2
+    with pytest.raises(ValueError):
+        resolve_levels([spec(["level_1", "mini_a"], 2)])                 # no quedaría ninguno para entrenar
+    with pytest.raises(ValueError):
+        resolve_levels(["no_existe"])
+
+
+def test_evaluate_and_history_with_validation(registered_minis, tmp_path):
+    """Evaluación por (nivel, fase), niveles desde config.json y columnas val_* en el historial del mejor modelo."""
+    from agents.callbacks import BestModelCallback
+    from agents.evaluate import describe, evaluate_policy_phases
+    from agents.runs import level_kwargs
+    cfg = {"train_levels": {"mini_a": 1.0, "level_1": 2.0}, "val_levels": ["mini_b"]}
+    train_kw, val_kw = level_kwargs(cfg), level_kwargs(cfg, "val")
+    assert [lv.name for lv in train_kw["level"]] == ["mini_a", "level_1"] and train_kw["level_weights"] == [1.0, 2.0]
+    assert level_kwargs({}) == {} and level_kwargs({}, "val") is None          # config vieja: como antes
+
+    class NeverJump:                                            # política que nunca salta: muere en el 1er obstáculo
+        def predict(self, obs, deterministic=True):
+            return 0, None
+
+    rows = evaluate_policy_phases(NeverJump(), "features", phases=[2.0, 2.5], **train_kw)
+    assert [(r["level"], r["x0"]) for r in rows] == [("mini_a", 2.0), ("mini_a", 2.5), ("level_1", 2.0), ("level_1", 2.5)]
+    assert not any(r["success"] for r in rows)
+    assert [r["oracle_jumps"] for r in rows if r["level"] == "level_1"] == [13, 13]    # oráculo de cada nivel
+    assert 0 < rows[0]["oracle_jumps"] < 13
+    assert "mini_a 0/2" in describe(rows) and "level_1 0/2" in describe(rows)
+
+    venv, model = ppo_on_vec_env()
+    cb = BestModelCallback(eval_freq=512, save_dir=tmp_path, phases=[2.0], val_env_kwargs=val_kw, **train_kw)
+    model.learn(total_timesteps=512, callback=cb)
+    header = (tmp_path / "eval_history.csv").read_text().splitlines()[0].split(",")
+    assert {"success", "val_success", "val_progress", "val_mean_jumps_won", "is_best"} <= set(header)

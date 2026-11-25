@@ -1,8 +1,8 @@
-# Geometry Dash RL: entorno Gymnasium + oráculo + agentes PPO/A2C/DQN/QR-DQN (nivel fijo)
+# Geometry Dash RL: entorno Gymnasium + oráculo + agentes PPO/A2C/DQN/QR-DQN (uno o varios niveles fijos)
 
 ## Estructura
 - `gd_env/physics.py`: dinámica determinista pura (cubo, gravedad, salto, colisiones). La usan el entorno **y** el oráculo.
-- `gd_env/levels.py`: nivel fijo `level_1()` (ASCII exportable con `to_ascii`), `parse_level`, `build_level`.
+- `gd_env/levels.py`: niveles (`level_1()`, exportable a ASCII con `to_ascii`), `parse_level`, `build_level`, el registro `LEVELS` (nombre → nivel) y `resolve_levels` (traduce `--levels` en niveles de entrenamiento con peso y de validación).
 - `gd_env/env.py`: `GeometryDashEnv` (Gymnasium), registrado como `GeometryDash-v0`.
 - `gd_env/oracle.py`: planificador exacto (programación dinámica por capas de tick) + `OraclePolicy`.
 - `gd_env/render.py`: frames, GIF del episodio y mapa del recorrido (`record_episode`).
@@ -56,6 +56,8 @@ python scripts/train.py --algos ppo --seeds 0 1 2 --jump-penalty 0.1 --ramp
 python scripts/train.py --algos ppo --seeds 0 --timesteps 200000 --init-model runs/features_fixed/ppo/seed0/best_model.zip --jump-penalty 0.05
 # entrenar con fase de arranque aleatoria en vez de nivel fijo
 python scripts/train.py --algos ppo dqn --train-phase random --run-name features_random
+# varios niveles (con pesos) y niveles de validación held out, definidos en un .json (ver "Varios niveles")
+python scripts/train.py --algos ppo --levels niveles/ejemplo.json
 # re-evaluar modelos guardados (más fases, regrabar GIFs)
 python scripts/evaluate.py --run runs/features_fixed --n-phases 20 --gif
 # re-evaluar un modelo suelto
@@ -72,6 +74,7 @@ Cada agente deja en `runs/<run-name>/<algo>/seed<N>/` el modelo final, el mejor 
 - **Observación** (`--obs`): `features` (vector + `MlpPolicy`, el baseline), `grid` (imagen 3×7×16 + CNN propia) o `dict` (grilla + vector). Detalle de la red en "Observaciones y CNN".
 - Penalización por salto, qué se guarda y continuar un entrenamiento: ver las secciones de abajo.
 - La recompensa se configura por parámetros o con una función propia: ver "Recompensa y `train()`" justo abajo.
+- **Niveles** (`--levels`): por defecto sólo `level_1`. Con varios, en cada episodio se sortea uno según su peso; ver "Varios niveles".
 
 ### Recompensa y `train()`
 Todo lo de la recompensa se pasa como parámetro, por línea de comandos o desde Python con `agents.train`:
@@ -135,20 +138,49 @@ La evolución de `c` queda en `jump_penalty.csv` (paso, `c`, tasa de éxito que 
 episodios de **entrenamiento** (acciones muestreadas, con exploración), más bajos que en la evaluación determinista: por eso el umbral
 por defecto es 80% y no 100%.
 
+### Varios niveles
+`--levels` acepta nombres de niveles registrados en `gd_env.LEVELS` (`gd_env/levels.py`) y/o un archivo `.json`:
+```bash
+python scripts/train.py --algos ppo --levels niveles/ejemplo.json      # conjunto definido en un archivo
+python scripts/train.py --algos ppo --levels level_1 level_2           # nombres sueltos: peso 1 c/u, validación null
+```
+```json
+{"niveles": {"level_1": 1.0, "level_2": 1.0, "level_3": 2.0},
+ "validacion": ["level_4", "level_5"]}
+```
+- **`niveles`**: nivel → peso (probabilidad relativa de jugarlo en cada episodio; arriba `level_3` sale el doble), o una lista
+  de nombres (todos con peso 1). Un peso 0 deja el nivel cargado sin jugarse.
+- **`validacion`**: niveles que **no** se usan para entrenar (held out):
+  - un nombre o una lista de nombres: esos niveles;
+  - un número `N`: sortea `N` de los de `niveles` y los saca del entrenamiento (reproducible con `--val-seed`, por defecto 0);
+  - `null`: no reserva ninguno; valida en uno de los de entrenamiento elegido al azar (`resumen.md` lo aclara).
+- Las claves que empiezan con `_` se ignoran (sirven de comentario). Ver `niveles/ejemplo.json`.
+- `--train-phase fixed/random` se aplica igual a todos los niveles. Todos tienen que tener la misma altura (7) y arrancar en `x = 2.0`;
+  `tests/test_env.py` comprueba con el oráculo que cada nivel registrado se gane desde las 10 fases de evaluación.
+- **Evaluación**: cada modelo se evalúa en todos los niveles de entrenamiento × 10 fases (`eval_fases*.csv`, con columna `level`) y,
+  aparte, en los de validación (`eval_fases*_val.csv`). Se graba un GIF por nivel (fase x0=2.0) más el de la peor falla; los de validación
+  con prefijo `val_`. `resumen.md` trae tablas de entrenamiento y de validación.
+- **Historial de validación**: las evaluaciones periódicas también miden los niveles de validación (columnas `val_success`,
+  `val_progress`, `val_mean_jumps_won` de `eval_history.csv`), pero el **mejor modelo se elige sólo con los de entrenamiento**.
+- `config.json` guarda lo pedido (`levels`, `val_seed`) y lo que resultó (`train_levels` con pesos, `val_levels`, `val_held_out`);
+  `scripts/evaluate.py` lo usa para re-evaluar con los mismos niveles. Las corridas viejas (sin niveles) siguen funcionando con `level_1`.
+- Los pesos se pueden cambiar durante el entrenamiento (`env_method("set_wrapper_attr", "level_weights", [...])`), igual que la
+  penalización por salto: es la base para una futura rampa que agregue niveles más difíciles de a poco.
+
 ### Qué se guarda
 ```
 runs/<run-name>/
 ├── config.json              parámetros de la corrida (se escribe al empezar)
-├── resumen.md               tablas entre seeds: modelo final y mejor modelo
+├── resumen.md               tablas entre seeds: modelo final y mejor modelo, en niveles de entrenamiento y de validación
 └── <algo>/seed<N>/
     ├── model.zip            modelo al terminar el entrenamiento
     ├── best_model.zip       mejor modelo de las evaluaciones periódicas  ·  best_model.json: en qué paso y con qué métricas
     ├── checkpoints/         model_<pasos>_steps.zip cada --checkpoint-freq pasos (25k)
-    ├── eval_history.csv     una fila por evaluación periódica (mismos pasos que los checkpoints); is_best=1 marca cuándo mejoró el récord
-    ├── eval_fases.csv       evaluación del modelo final  ·  eval_fases_best.csv  del mejor modelo
+    ├── eval_history.csv     una fila por evaluación periódica (mismos pasos que los checkpoints); is_best=1 marca cuándo mejoró el récord; val_* = validación
+    ├── eval_fases.csv       evaluación del modelo final  ·  eval_fases_best.csv  del mejor modelo  ·  *_val.csv: en los niveles de validación
     ├── monitor/             un CSV por entorno con cada episodio de entrenamiento
     ├── jump_penalty.csv     evolución de c (sólo con --ramp)
-    └── episodio_*.gif, *_recorrido.png  (final)  ·  mejor_episodio_*.gif, mejor_*_recorrido.png  (mejor)
+    └── episodio_<nivel>_x0_*.gif, *_recorrido.png  (final)  ·  mejor_episodio_*  (mejor)  ·  val_*  (niveles de validación)
 ```
 - **Mejor modelo**: cada `--eval-freq` pasos (25k; `0` lo desactiva) y al terminar se evalúa el modelo de forma determinista en las
   10 fases. Gana el de **más fases ganadas**; a igualdad, más progreso; a igualdad, **menos saltos**. Hace falta porque PPO es muy
@@ -201,7 +233,8 @@ from agents.common import load_for_training
 model = load_for_training("ppo", "modelos/best_model.zip", env, seed=0)
 model.learn(200_000)
 ```
-Cada fila de `evaluate_policy_phases` tiene: `x0, success, progress, return, ticks, status, n_jumps, oracle_jumps, death_x`.
+Cada fila de `evaluate_policy_phases` tiene: `level, x0, success, progress, return, ticks, status, n_jumps, oracle_jumps, death_x`
+(un episodio por nivel y fase; los niveles son los de `level=` en los kwargs, por defecto `level_1`).
 
 ## Observaciones y CNN
 `GeometryDashEnv(obs_mode=...)` ofrece tres observaciones; `build_model` elige la política de SB3 y el extractor de features según cuál se use:

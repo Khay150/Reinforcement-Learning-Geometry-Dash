@@ -81,15 +81,17 @@ class BestModelCallback(BaseCallback):
 
     Deja en ``save_dir``: ``best_model.zip``, ``best_model.json`` (paso y métricas del mejor) y
     ``eval_history.csv`` (todas las evaluaciones, con ``is_best`` marcando cuándo mejoró el récord).
-    ``env_kwargs`` va al entorno de evaluación.
+    ``env_kwargs`` va al entorno de evaluación (niveles de entrenamiento + recompensa): con eso se elige el mejor.
+    ``val_env_kwargs`` (opcional): niveles de validación. Se evalúan y se anotan en el historial (columnas ``val_*``),
+    pero **no** cuentan para elegir el mejor modelo.
     """
 
     def __init__(self, eval_freq: int, save_dir: str | Path, obs_mode: str = "features", phases=EVAL_PHASES,
-                 **env_kwargs):
+                 val_env_kwargs: dict | None = None, **env_kwargs):
         super().__init__()
         # eval_freq en pasos del entrenamiento; obs_mode debe coincidir con el del entorno de entrenamiento.
         self.eval_freq, self.save_dir, self.obs_mode, self.phases = eval_freq, Path(save_dir), obs_mode, phases
-        self.env_kwargs = env_kwargs
+        self.env_kwargs, self.val_env_kwargs = env_kwargs, val_env_kwargs
         self.best_score = None
         self._last_eval = 0
 
@@ -100,6 +102,9 @@ class BestModelCallback(BaseCallback):
         is_best = self.best_score is None or _score(m) > self.best_score
         info = {"timesteps": self.num_timesteps, **m,
                 "train_jump_penalty": self.training_env.get_attr("jump_penalty", indices=[0])[0]}
+        if self.val_env_kwargs is not None:          # validación: sólo se registra
+            vm = metrics(evaluate_policy_phases(self.model, self.obs_mode, self.phases, **self.val_env_kwargs))
+            info.update({f"val_{k}": v for k, v in vm.items()})
         append_row({**info, "is_best": int(is_best)}, self.save_dir / "eval_history.csv")
         if is_best:
             self.best_score = _score(m)

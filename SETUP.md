@@ -43,7 +43,7 @@ PyTorch pesa bastante (varios cientos de MB), puede tardar unos minutos. Alcanza
 ## 4. Chequear que todo funciona
 
 ```bash
-# a) tests del entorno, los callbacks y la CNN (deberían pasar 40; tardan ~15 s)
+# a) tests del entorno, los callbacks y la CNN (deberían pasar 45 y saltearse 3 si no está sb3-contrib; tardan ~45 s)
 pytest tests
 
 # b) el oráculo resuelve el nivel y lo reproduce (debe terminar con status=win progreso=100%)
@@ -94,17 +94,21 @@ python scripts/train.py --algos ppo dqn --train-phase random --run-name features
 # con CNN: observación "grid" (imagen 3x7x16) o "dict" (grilla + vector); el run queda como grid_fixed / dict_fixed
 python scripts/train.py --algos ppo dqn --obs grid --seeds 0 1 2 --timesteps 300000
 python scripts/train.py --algos ppo dqn --obs dict --seeds 0 1 2 --timesteps 300000
+
+# varios niveles: un .json con los niveles de entrenamiento (con peso) y los de validación (held out)
+python scripts/train.py --algos ppo --levels niveles/ejemplo.json
 ```
 Opciones útiles: `--algos ppo` (solo uno; valores posibles: `ppo`, `a2c`, `dqn`, `qrdqn`), `--seeds 0` (una seed),
 `--n-envs 8` (entornos en paralelo, solo PPO y A2C), `--jump-penalty 0.05` (penaliza cada salto efectivo),
 `--win-bonus`, `--death-penalty`, `--progress-scale`, `--survive-bonus` (parámetros de la recompensa), `--reward-fn archivo.py:funcion` (recompensa propia),
 `--obs features|grid|dict` (tipo de observación: vector con MLP, o grilla / grilla + vector con CNN; ver el README),
-`--ramp` (la penalización sube gradualmente), `--init-model <zip>` (sigue entrenando un modelo),
+`--ramp` (la penalización sube gradualmente), `--levels <nombres o .json>` (varios niveles; ver "Varios niveles" en el README), `--init-model <zip>` (sigue entrenando un modelo),
 `--no-gif` (no graba GIFs), `--out runs` (carpeta de salida). Todas las opciones: `python scripts/train.py -h`.
 
 Por cada agente se guarda en `runs/<run-name>/<algo>/seed<N>/`:
 `model.zip` (final), `best_model.zip` (el mejor de las evaluaciones periódicas, ver el README), `checkpoints/`,
-`monitor/` (curva de aprendizaje), `eval_history.csv`, `eval_fases.csv`, `episodio_x0_<x0>.gif` y `*_recorrido.png`.
+`monitor/` (curva de aprendizaje), `eval_history.csv`, `eval_fases.csv` (y `eval_fases_val.csv` en los niveles de validación),
+`episodio_<nivel>_x0_<x0>.gif` y `*_recorrido.png` (los de validación con prefijo `val_`).
 La tabla comparativa entre seeds queda en `runs/<run-name>/resumen.md`. Si la carpeta de la corrida ya existe,
 la nueva se guarda con fecha y hora en el nombre (no se pisa nada).
 

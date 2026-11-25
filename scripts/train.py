@@ -11,6 +11,8 @@ Ejemplos
   python scripts/train.py --algos ppo --win-bonus 2 --death-penalty 5 --jump-penalty 0.05   # parámetros de la recompensa
   python scripts/train.py --algos ppo --reward-fn ejemplos/reward_ejemplo.py:penaliza_saltos   # recompensa propia
   python scripts/train.py --algos ppo --seeds 0 --timesteps 200000 --init-model runs/X/ppo/seed0/best_model.zip
+  python scripts/train.py --algos ppo --levels niveles/ejemplo.json                   # varios niveles + validación
+  python scripts/train.py --algos ppo --levels level_1 level_2                        # nombres sueltos (peso 1 c/u)
 
 Salida (por agente) en  runs/<run-name>/<algo>/seed<N>/ :
   model.zip, best_model.zip (+ .json), checkpoints/, monitor/, eval_history.csv, eval_fases*.csv, GIFs y *_recorrido.png
@@ -39,6 +41,11 @@ def parse_args():
     ap.add_argument("--train-phase", default="fixed", choices=["fixed", "random"],
                     help="fixed: siempre x0=2.0 (nivel fijo). random: x0 aleatorio en cada episodio")
     ap.add_argument("--n-envs", type=int, default=8, help="entornos en paralelo (sólo PPO/A2C; DQN y QR-DQN usan 1)")
+    ap.add_argument("--levels", nargs="+", default=None, metavar="NIVEL|ARCHIVO.json",
+                    help="niveles de entrenamiento: nombres (gd_env.LEVELS) y/o un .json con pesos y niveles de "
+                         "validación (ver niveles/ejemplo.json). Por defecto, sólo level_1")
+    ap.add_argument("--val-seed", type=int, default=0,
+                    help="semilla del sorteo de niveles de validación ('validacion': N o null en el .json)")
     ap.add_argument("--run-name", default=None)
     ap.add_argument("--out", default="runs")
     ap.add_argument("--no-gif", action="store_true")
