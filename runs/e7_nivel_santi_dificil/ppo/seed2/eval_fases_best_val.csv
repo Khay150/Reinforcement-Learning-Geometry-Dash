@@ -1,0 +1,11 @@
+level,x0,success,progress,return,ticks,status,n_jumps,oracle_jumps,death_x
+santi_dificil,2.0,0,0.6111,-9.3889,166,crash,7,13,35.0
+santi_dificil,2.106,0,0.9074,-9.0945,245,crash,12,13,51.0
+santi_dificil,2.211,0,0.6111,-9.3928,164,crash,7,13,35.0
+santi_dificil,2.317,0,0.9074,-9.0985,244,crash,12,13,51.0
+santi_dificil,2.422,0,0.6111,-9.3967,163,crash,7,13,35.0
+santi_dificil,2.528,0,0.9074,-9.1024,243,crash,12,13,51.0
+santi_dificil,2.633,0,0.6111,-9.4006,162,crash,7,13,35.0
+santi_dificil,2.739,0,0.9074,-9.1063,242,crash,12,13,51.0
+santi_dificil,2.844,0,0.6267,-9.3889,165,spike,8,13,35.84
+santi_dificil,2.95,0,0.9065,-9.1111,240,fell,12,13,50.95
