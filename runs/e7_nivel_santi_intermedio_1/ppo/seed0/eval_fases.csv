@@ -1,0 +1,11 @@
+level,x0,success,progress,return,ticks,status,n_jumps,oracle_jumps,death_x
+santi_intermedio_1,2.0,0,0.8519,-9.1481,231,crash,9,7,48.0
+santi_intermedio_1,2.106,0,0.8519,-9.1501,230,crash,9,7,48.0
+santi_intermedio_1,2.211,0,0.8519,-9.1521,229,crash,9,7,48.0
+santi_intermedio_1,2.317,0,0.8519,-9.154,229,crash,9,7,48.0
+santi_intermedio_1,2.422,0,0.8519,-9.156,228,crash,9,7,48.0
+santi_intermedio_1,2.528,0,0.8519,-9.1579,228,crash,9,7,48.0
+santi_intermedio_1,2.633,0,0.8519,-9.1599,227,crash,9,7,48.0
+santi_intermedio_1,2.739,0,0.8519,-9.1618,227,crash,9,7,48.0
+santi_intermedio_1,2.844,0,0.8519,-9.1638,226,crash,9,7,48.0
+santi_intermedio_1,2.95,0,0.8519,-9.1657,226,crash,9,7,48.0
