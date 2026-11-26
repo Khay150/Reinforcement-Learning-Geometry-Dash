@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor de niveles GD</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* VOICE: juguetón pero de herramienta, como el editor del propio juego
+   IDEA: el editor de niveles de Geometry Dash: grilla azul nocturna, bloques que brillan, cubo amarillo
+   PICTURE: la grilla editable del nivel ocupa el primer plano
+   COLOUR and TYPE: azul profundo de fondo de nivel, bloques azul eléctrico, acento amarillo del cubo; Lilita One + Nunito
+   LAYOUT: título chico, grilla a todo el ancho con scroll lateral, debajo controles y el código generado */
+:root{color-scheme:light dark;--bg:light-dark(#eef1fb,#0b1022);--ink:light-dark(#121833,#e7ebff);--muted:light-dark(#525b80,#9aa3c7);--panel:light-dark(#ffffff,#141b38);--line:light-dark(#d5dbf0,#252e57);--accent:#ffcf2e;--accentInk:#3a2c00;--warn:light-dark(#9a3b00,#ffb37a)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Nunito,system-ui,sans-serif;overflow-x:clip}
+.band{padding:clamp(20px,3vw,40px) max(4vw,16px)}
+h1{font:400 clamp(30px,4vw,44px)/1.05 "Lilita One",Nunito,sans-serif;margin:0 0 6px;text-wrap:balance}
+.sub{color:var(--muted);margin:0;max-width:70ch}
+.stage{background:linear-gradient(rgb(70,90,200),rgb(120,160,240));border-radius:14px;padding:14px 14px 10px;position:relative}
+.scroll{overflow-x:auto;padding-bottom:6px}
+.nums,.grid{display:grid;grid-auto-flow:column;width:max-content}
+.nums{grid-template-rows:18px;font:600 11px/18px "JetBrains Mono",monospace;color:#e8ecff}
+.nums span{width:26px;text-align:left;padding-left:2px}
+.grid{grid-template-rows:repeat(7,26px);border-left:1px solid rgba(255,255,255,.18);border-top:1px solid rgba(255,255,255,.18);touch-action:none;user-select:none}
+.c{width:26px;height:26px;border:0;border-right:1px solid rgba(255,255,255,.18);border-bottom:1px solid rgba(255,255,255,.18);background:transparent;padding:0;cursor:pointer;position:relative}
+.c:hover{background:rgba(255,255,255,.18)}
+.c:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;z-index:2}
+.c.b{background:rgb(25,25,45);box-shadow:inset 0 0 0 1px rgb(90,90,140)}
+.c.s::after{content:"";position:absolute;inset:3px 3px 0 2px;background:rgb(230,60,60);clip-path:polygon(50% 0,100% 100%,0 100%)}
+.c.d::after{content:"";position:absolute;inset:1px 3px 4px 2px;background:rgb(230,60,60);clip-path:polygon(0 0,100% 0,50% 100%)}
+.c.goal{background-image:repeating-conic-gradient(rgba(255,255,255,.22) 0 25%,transparent 0 50%);background-size:13px 13px}
+.c.goal.b{background:rgb(25,25,45)}
+.c.cube::before{content:"";position:absolute;inset:3px;background:rgb(250,210,40);border:2px solid rgb(60,40,0)}
+.c.cube::after{content:"";position:absolute;left:58%;top:30%;width:22%;height:18%;background:rgb(60,40,0)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;color:#fff;font-size:13px;text-shadow:0 1px 2px rgba(0,0,30,.5)}
+.legend i{display:inline-block;width:14px;height:14px;vertical-align:-2px;margin-right:5px;border-radius:2px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin-top:16px}
+label{display:grid;gap:4px;font-size:13px;font-weight:600;color:var(--muted)}
+input[type=text],input[type=number],textarea{font:16px Nunito,sans-serif;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 11px;min-height:44px}
+input[type=number]{width:110px}input[type=text]{width:190px}
+button.btn{font:800 15px Nunito,sans-serif;min-height:44px;padding:0 16px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+button.btn:hover{border-color:var(--muted)}
+button.btn:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #4f8bff;outline-offset:2px}
+button.main{background:var(--accent);color:var(--accentInk);border-color:#d9a900}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card h2{font:400 22px/1.1 "Lilita One",sans-serif;margin:0 0 10px}
+pre{margin:0;background:#0b1022;color:#dfe5ff;border-radius:8px;padding:14px;font:13px/1.5 "JetBrains Mono",monospace;max-height:420px;overflow:auto}
+.head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
+.head h2{margin:0}
+ul.warn{margin:0;padding-left:18px;color:var(--warn)}ul.warn li{margin:4px 0}
+.ok{color:light-dark(#1e6b2e,#8fe3a1);margin:0}
+.stats{display:flex;flex-wrap:wrap;gap:8px 18px;margin:0 0 12px;font-size:14px;color:var(--muted)}
+.stats b{color:var(--ink)}
+textarea{width:100%;min-height:150px;font:13px/1.4 "JetBrains Mono",monospace}
+.note{font-size:13px;color:var(--muted);margin:10px 0 0}
+.toast{font-size:13px;color:var(--muted);min-width:70px}
+.play{margin-top:16px;background:rgb(15,15,25);border-radius:14px;overflow:hidden}
+#cv{display:block;width:100%;height:clamp(196px,28vw,280px);touch-action:none;cursor:pointer}
+.hud{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:10px 14px;background:rgb(22,22,36);color:#e6e6f0}
+.hud select{font:16px Nunito,sans-serif;min-height:40px;border-radius:8px;border:1px solid rgb(90,90,140);background:rgb(25,25,45);color:#fff;padding:0 8px}
+.inl{display:flex;align-items:center;gap:8px;color:#c4cdff}
+.statusTxt{font-size:14px;color:#c4cdff;flex:1 1 260px}
+@media(max-width:860px){.cols{grid-template-columns:minmax(0,1fr)}}
+@media(prefers-reduced-motion:no-preference){.c{transition:background-color .08s}}
+</style>
+</head>
+<body>
+<div class="band">
+  <h1>Editor de niveles</h1>
+  <p class="sub">Hacé clic en una casilla para rotarla: vacío → bloque → pincho → pincho colgante → vacío. Mantené apretado y arrastrá para pintar varias con el mismo tipo; clic derecho la vacía. La fila de abajo es el piso: dejarla vacía hace un pozo.</p>
+
+  <div class="stage" style="margin-top:18px">
+    <div class="scroll" id="scroller">
+      <div class="nums" id="nums"></div>
+      <div class="grid" id="grid" role="grid" aria-label="Nivel, 7 filas"></div>
+    </div>
+    <div class="legend">
+      <span><i style="background:rgb(25,25,45);box-shadow:inset 0 0 0 1px rgb(90,90,140)"></i>bloque</span>
+      <span><i style="background:rgb(230,60,60);clip-path:polygon(50% 0,100% 100%,0 100%)"></i>pincho</span>
+      <span><i style="background:rgb(230,60,60);clip-path:polygon(0 0,100% 0,50% 100%)"></i>pincho colgante</span>
+      <span><i style="background:rgb(250,210,40);box-shadow:inset 0 0 0 2px rgb(60,40,0)"></i>arranque (x = 2)</span>
+      <span><i style="background:repeating-conic-gradient(#ffffff55 0 25%,transparent 0 50%);background-size:7px 7px"></i>meta (4 columnas antes del final)</span>
+    </div>
+  </div>
+
+  <div class="play" id="playBox">
+    <canvas id="cv" aria-label="Juego: el cubo avanza solo, saltá con espacio"></canvas>
+    <div class="hud">
+      <button class="btn main" id="playBtn">Jugar</button>
+      <label class="inl">Velocidad
+        <select id="speed"><option value="0.5">0,5×</option><option value="0.75">0,75×</option><option value="1" selected>1× (60 ticks/s)</option></select>
+      </label>
+      <span id="status" class="statusTxt">Espacio, clic o tocar la pantalla para saltar. Mantener apretado salta apenas toca el piso.</span>
+    </div>
+  </div>
+
+  <div class="row">
+    <input type="hidden" id="name" value="nivel">
+    <label>Largo (columnas)<input type="number" id="len" min="12" max="300" value="60"></label>
+    <button class="btn" id="undo">Deshacer</button>
+    <button class="btn" id="clear">Vaciar</button>
+    <button class="btn" id="l1">Cargar level_1</button>
+  </div>
+</div>
+
+<div class="band" style="padding-top:0">
+  <div class="cols">
+      <div class="card">
+        <h2>Revisión rápida</h2>
+        <p class="stats" id="stats"></p>
+        <div id="warns"></div>
+        <p class="note">Son chequeos aproximados de la física (salto de unas 3 columnas, sube menos de 2 tiles). El que manda es el oráculo.</p>
+      </div>
+      <div class="card">
+        <h2>Cargar desde ASCII</h2>
+        <textarea id="paste" spellcheck="false" placeholder="Pegá acá un dibujo (por ejemplo, la salida de to_ascii) y apretá Cargar"></textarea>
+        <div class="row" style="margin-top:10px"><button class="btn" id="load">Cargar</button><span class="toast" id="loadMsg"></span></div>
+      </div>
+  </div>
+</div>
+
+<script>
+{
+const H = 7, E = ".", B = "#", S = "^", D = "v", NEXT = {".": "#", "#": "^", "^": "v", "v": "."};
+const $ = id => document.getElementById(id);
+let grid = [], cols = 60, history = [], painting = false, paintVal = null;
+
+const blank = n => Array.from({length: H}, (_, r) => Array.from({length: n}, () => r === H - 1 ? B : E));
+const snap = () => { history.push(JSON.stringify(grid)); if (history.length > 200) history.shift(); };
+
+function buildLevel1() {
+  const g = blank(110);
+  const floor = H - 1;
+  [[46, 2], [80, 2]].forEach(([c, w]) => { for (let i = c; i < c + w; i++) g[floor][i] = E; });
+  [[34,1],[35,1],[36,1],[52,1],[53,1],[54,2],[55,2],[56,2],[75,1],[76,1],[77,1],[101,1]]
+    .forEach(([c, h]) => { for (let k = 1; k <= h; k++) g[floor - k][c] = B; });
+  [14,24,25,40,66,67,86,96].forEach(c => { g[floor - 1][c] = S; });
+  return g;
+}
+
+function render() {
+  $("nums").innerHTML = Array.from({length: cols}, (_, c) => `<span>${c % 5 === 0 ? c : ""}</span>`).join("");
+  const goal = cols - 4, cells = [];
+  for (let c = 0; c < cols; c++) for (let r = 0; r < H; r++) {
+    const v = grid[r][c];
+    const cls = ["c", v === B ? "b" : v === S ? "s" : v === D ? "d" : "", c >= goal ? "goal" : "", c === 2 && r === H - 2 && v === E ? "cube" : ""].join(" ");
+    const tipo = v === B ? "bloque" : v === S ? "pincho" : v === D ? "pincho colgante" : "vacío";
+    cells.push(`<button class="${cls}" data-r="${r}" data-c="${c}" style="grid-row:${r + 1}" aria-label="Columna ${c}, altura ${H - 1 - r}: ${tipo}"></button>`);
+  }
+  $("grid").innerHTML = cells.join("");
+  update();
+}
+
+function setCell(btn, v) {
+  const r = +btn.dataset.r, c = +btn.dataset.c;
+  if (grid[r][c] === v) return;
+  grid[r][c] = v;
+  btn.classList.toggle("b", v === B);
+  btn.classList.toggle("s", v === S);
+  btn.classList.toggle("d", v === D);
+  btn.classList.toggle("cube", c === 2 && r === H - 2 && v === E);
+  btn.setAttribute("aria-label", `Columna ${c}, altura ${H - 1 - r}: ${v === B ? "bloque" : v === S ? "pincho" : v === D ? "pincho colgante" : "vacío"}`);
+}
+
+const ascii = () => grid.map(row => row.join("")).join("\n");
+const ident = () => ($("name").value.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_").replace(/^(\d)/, "_$1") || "nuevo");
+
+function checks() {
+  const w = [], floor = H - 1;
+  const top = c => { for (let r = 0; r < H; r++) if (grid[r][c] === B) return H - r; return 0; };
+  for (let c = 0; c <= Math.min(4, cols - 1); c++) {
+    if (grid[floor][c] !== B) { w.push(`Hay un pozo en el arranque (columna ${c}): el cubo empieza en x = 2 y se cae.`); break; }
+    if (grid[floor - 1][c] !== E) { w.push(`Hay un obstáculo pegado al piso en las columnas 0–4: el cubo arranca ahí y no tiene tiempo de reaccionar.`); break; }
+  }
+  let run = 0;
+  for (let c = 0; c <= cols; c++) {
+    if (c < cols && grid[floor][c] === E && top(c) === 0) run++;
+    else { if (run > 3) w.push(`Pozo de ${run} de ancho en las columnas ${c - run}–${c - 1}: un salto cubre unas 3, seguro no se puede.`); else if (run === 3) w.push(`Pozo de 3 en las columnas ${c - 3}–${c - 1}: al límite, verificalo con el oráculo.`); run = 0; }
+  }
+  for (let c = 1; c < cols; c++) {
+    const d = top(c) - top(c - 1);
+    if (d >= 2) w.push(`Subida de ${d} en la columna ${c}: el salto no llega a 2 tiles, hace falta un escalón antes.`);
+    else if (d >= 1 && c + 1 < cols && top(c + 1) > top(c)) w.push(`Escalón de 1 columna de ancho en la columna ${c}: no da tiempo a aterrizar y volver a saltar. Hacelo de 2 o más.`);
+  }
+  for (let r = 0; r < H; r++) {
+    let s = 0;
+    for (let c = 0; c <= cols; c++) {
+      if (c < cols && grid[r][c] === S) s++;
+      else { if (s >= 4) w.push(`${s} pinchos seguidos en las columnas ${c - s}–${c - 1}: casi seguro imposible.`); else if (s === 3) w.push(`3 pinchos seguidos en las columnas ${c - 3}–${c - 1}: muy justo.`); s = 0; }
+    }
+  }
+  for (let c = 0; c < cols; c++) for (let r = 0; r < floor; r++)
+    if (grid[r][c] === S && grid[r + 1][c] === E) { w.push(`Pincho flotando en la columna ${c}: es válido, pero el cubo lo puede tocar desde abajo.`); break; }
+  for (let c = 0; c < cols; c++) for (let r = 0; r < H; r++)
+    if (grid[r][c] === D && (r === 0 || grid[r - 1][c] !== B)) { w.push(`Pincho colgante sin bloque arriba en la columna ${c}: es válido, pero se ve raro (y el cubo lo puede pisar desde arriba).`); break; }
+  if (top(cols - 5) === 0 && grid[floor][cols - 5] === E) w.push("La meta cae sobre un pozo: mejor dejar piso al final.");
+  return w;
+}
+
+function update() {
+  const flat = grid.flat();
+  let pits = 0;
+  for (let c = 0; c < cols; c++) if (grid[H - 1][c] === E && (c === 0 || grid[H - 1][c - 1] !== E)) pits++;
+  $("stats").innerHTML = `<span>Largo <b>${cols}</b></span><span>Meta en x = <b>${cols - 4}</b></span><span>Pinchos <b>${flat.filter(v => v === S).length}</b></span><span>Colgantes <b>${flat.filter(v => v === D).length}</b></span><span>Pozos <b>${pits}</b></span><span>Bloques sobre el piso <b>${grid.slice(0, H - 1).flat().filter(v => v === B).length}</b></span>`;
+  const w = checks();
+  $("warns").innerHTML = w.length ? `<ul class="warn">${w.map(x => `<li>${x}</li>`).join("")}</ul>` : `<p class="ok">Nada raro a simple vista.</p>`;
+  try { localStorage.setItem("gd-editor", JSON.stringify({grid, name: $("name").value})); } catch (e) {}
+  if (!game || game.status !== "ok") { G = null; draw(); }
+}
+
+function resize(n) {
+  n = Math.max(12, Math.min(300, n | 0));
+  if (n === cols) return;
+  snap();
+  grid = grid.map((row, r) => n < cols ? row.slice(0, n) : row.concat(Array(n - cols).fill(r === H - 1 ? B : E)));
+  cols = n; render();
+}
+
+function load(g, name) {
+  grid = g; cols = g[0].length; $("len").value = cols;
+  if (name) $("name").value = name;
+  render();
+}
+
+function parseAscii(text) {
+  let rows = text.replace(/\r/g, "").split("\n").map(r => r.replace(/\s+$/, "")).filter(r => r.trim() !== "");
+  rows = rows.map(r => r.trim());
+  if (!rows.length) throw new Error("No hay nada para cargar.");
+  const bad = rows.join("").match(/[^.#^v]/);
+  if (bad) throw new Error(`Carácter no válido: "${bad[0]}". Sólo se aceptan . # ^ v`);
+  if (rows.length > H) throw new Error(`Tiene ${rows.length} filas; los niveles tienen que tener ${H}.`);
+  const w = Math.max(...rows.map(r => r.length));
+  while (rows.length < H) rows.unshift(".".repeat(w));
+  return rows.map((r, i) => r.padEnd(w, i === H - 1 ? "#" : ".").split(""));
+}
+
+const grd = $("grid");
+grd.addEventListener("pointerdown", e => {
+  const b = e.target.closest(".c"); if (!b) return;
+  e.preventDefault(); snap();
+  const cur = grid[+b.dataset.r][+b.dataset.c];
+  paintVal = e.button === 2 ? E : NEXT[cur];
+  setCell(b, paintVal); painting = true; update();
+});
+grd.addEventListener("pointerover", e => {
+  if (!painting) return;
+  const b = e.target.closest(".c"); if (b) { setCell(b, paintVal); update(); }
+});
+grd.addEventListener("pointermove", e => {
+  if (!painting || e.pointerType === "mouse") return;
+  const el = document.elementFromPoint(e.clientX, e.clientY), b = el && el.closest(".c");
+  if (b) { setCell(b, paintVal); update(); }
+});
+window.addEventListener("pointerup", () => { painting = false; });
+grd.addEventListener("contextmenu", e => e.preventDefault());
+grd.addEventListener("keydown", e => {
+  const b = e.target.closest(".c"); if (!b) return;
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); snap(); setCell(b, NEXT[grid[+b.dataset.r][+b.dataset.c]]); update(); }
+});
+
+$("undo").addEventListener("click", () => { if (history.length) { grid = JSON.parse(history.pop()); cols = grid[0].length; $("len").value = cols; render(); } });
+$("clear").addEventListener("click", () => { snap(); grid = blank(cols); render(); });
+$("l1").addEventListener("click", () => { snap(); load(buildLevel1(), "level_1_copia"); });
+$("len").addEventListener("change", e => resize(+e.target.value));
+$("name").addEventListener("input", update);
+$("load").addEventListener("click", () => {
+  try { snap(); load(parseAscii($("paste").value)); $("loadMsg").textContent = "Cargado."; }
+  catch (err) { history.pop(); $("loadMsg").textContent = err.message; }
+});
+
+const P = {vx: 0.2, gravity: 0.05, jump_v: 0.4, max_fall: 0.6, spike_w: 0.3, spike_h: 0.3, eps: 1e-9};
+let G = null, game = null, holding = false, raf = 0, acc = 0, last = 0;
+
+function makeLevel() {
+  const L = cols, tiles = [], spikes = new Set(), down = new Set();
+  for (let row = 0; row < H; row++) {
+    tiles.push(grid[H - 1 - row].map(v => v === B ? 1 : v === S ? 2 : v === D ? 3 : 0));
+    tiles[row].forEach((v, c) => { if (v === 2) spikes.add(row * 10000 + c); if (v === 3) down.add(row * 10000 + c); });
+  }
+  return {L, tiles, spikes, down, goal: L - 4, tile: (r, c) => (r >= 0 && r < H && c >= 0 && c < L) ? tiles[r][c] : 0};
+}
+function solid(lv, x, y) {
+  const e = P.eps, out = [];
+  const c0 = Math.floor(x + e), c1 = Math.floor(x + 1 - e), r0 = Math.floor(y + e), r1 = Math.floor(y + 1 - e);
+  for (let r = Math.max(r0, 0); r <= r1; r++) for (let c = c0; c <= c1; c++) if (lv.tile(r, c) === 1) out.push([r, c]);
+  return out;
+}
+function spikeHit(lv, x, y) {
+  const e = P.eps, lo = (1 - P.spike_w) / 2, hi = (1 + P.spike_w) / 2;
+  for (let c = Math.floor(x); c <= Math.floor(x + 1); c++)
+    for (let r = Math.max(Math.floor(y), 0); r <= Math.floor(y + 1); r++)
+    {
+      if (lv.spikes.has(r * 10000 + c) && x < c + hi - e && x + 1 > c + lo + e && y < r + P.spike_h - e && y + 1 > r + e) return true;
+      if (lv.down.has(r * 10000 + c) && x < c + hi - e && x + 1 > c + lo + e && y < r + 1 - e && y + 1 > r + 1 - P.spike_h + e) return true;
+    }
+  return false;
+}
+function step(lv, s, a) {
+  let vy = (a === 1 && s.on) ? P.jump_v : s.vy;
+  vy = Math.max(vy - P.gravity, -P.max_fall);
+  const t = s.t + 1, x = s.x0 + P.vx * t;
+  const side = solid(lv, x, s.y);
+  if (side.length) return [{...s, t, x: Math.max(s.x, Math.min(...side.map(h => h[1])) - 1), vy: 0}, "crash"];
+  let y = s.y + vy, on = false;
+  const hit = solid(lv, x, y);
+  if (hit.length) {
+    if (vy <= 0) { y = Math.max(...hit.map(h => h[0] + 1)); on = true; } else y = Math.min(...hit.map(h => h[0])) - 1;
+    vy = 0;
+  }
+  const n = {t, x0: s.x0, x, y, vy, on};
+  if (spikeHit(lv, x, y)) return [n, "spike"];
+  if (y < -1) return [n, "fell"];
+  if (x >= lv.goal) return [n, "win"];
+  return [n, "ok"];
+}
+
+const cv = $("cv"), ctx = cv.getContext("2d");
+const MSG = {crash: "Chocaste de costado contra un bloque", spike: "Tocaste un pincho", fell: "Te caíste a un pozo", win: "¡Ganaste!"};
+let attempts = 0;
+
+function newGame() {
+  G = makeLevel(); attempts++;
+  game = {s: {t: 0, x0: 2, x: 2, y: 1, vy: 0, on: true}, status: "ok", jumps: 0, trail: [], jumpsAt: []};
+  acc = 0; last = performance.now();
+  cancelAnimationFrame(raf); raf = requestAnimationFrame(loop);
+  $("playBtn").textContent = "Reiniciar";
+  cv.focus({preventScroll: true});
+}
+function loop(now) {
+  const rate = 60 * +$("speed").value;
+  acc += Math.min(0.25, (now - last) / 1000); last = now;
+  while (acc >= 1 / rate && game.status === "ok") {
+    acc -= 1 / rate;
+    const a = holding ? 1 : 0;
+    if (a === 1 && game.s.on) { game.jumps++; game.jumpsAt.push([game.s.x, game.s.y]); }
+    [game.s, game.status] = step(G, game.s, a);
+    game.trail.push([game.s.x, game.s.y]); if (game.trail.length > 90) game.trail.shift();
+  }
+  draw();
+  const prog = Math.max(0, Math.min(1, (game.s.x - 2) / (G.goal - 2)));
+  $("status").textContent = game.status === "ok"
+    ? `Intento ${attempts} · progreso ${Math.round(prog * 100)}% · saltos ${game.jumps}`
+    : `${MSG[game.status]} · progreso ${Math.round(prog * 100)}% · saltos ${game.jumps} · espacio o Reiniciar para otro intento`;
+  if (game.status === "ok") raf = requestAnimationFrame(loop);
+}
+function draw() {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, Hc = cv.clientHeight;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(Hc * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(Hc * dpr); }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const HUD = 28, cell = (Hc - HUD) / H, Hp = H * cell;
+  const lv = G || makeLevel(), s = game ? game.s : {x: 2, y: 1, t: 0};
+  const cam = s.x - 6;                                   // el cubo queda a 6 tiles del borde izquierdo
+  const sx = x => (x - cam) * cell, sy = y => (H - y) * cell;
+  const sky = ctx.createLinearGradient(0, 0, 0, Hc);
+  sky.addColorStop(0, "rgb(70,90,200)"); sky.addColorStop(1, "rgb(120,160,240)");
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, Hc);
+  const c0 = Math.max(0, Math.floor(cam)), c1 = Math.min(lv.L - 1, Math.floor(cam) + Math.ceil(W / cell) + 2);
+  for (let c = c0; c <= c1; c++) for (let r = 0; r < H; r++) {
+    const v = lv.tile(r, c); if (!v) continue;
+    const px = sx(c), y0 = sy(r + 1);
+    if (v === 1) {
+      ctx.fillStyle = "rgb(25,25,45)"; ctx.fillRect(px, y0, cell, cell);
+      ctx.strokeStyle = "rgb(90,90,140)"; ctx.lineWidth = 1; ctx.strokeRect(px + .5, y0 + .5, cell - 1, cell - 1);
+    } else {
+      ctx.fillStyle = "rgb(230,60,60)"; ctx.beginPath();
+      if (v === 3) { ctx.moveTo(px + 2, y0 + 1); ctx.lineTo(px + cell - 3, y0 + 1); ctx.lineTo(px + cell / 2, y0 + cell - 4); }
+      else { ctx.moveTo(px + 2, y0 + cell - 1); ctx.lineTo(px + cell / 2, y0 + 3); ctx.lineTo(px + cell - 3, y0 + cell - 1); }
+      ctx.fill();
+    }
+  }
+  if (lv.goal >= c0 && lv.goal <= c1) {                  // línea de meta
+    ctx.strokeStyle = "rgba(255,255,255,.55)"; ctx.setLineDash([4, 4]); ctx.beginPath();
+    ctx.moveTo(sx(lv.goal), 0); ctx.lineTo(sx(lv.goal), Hp); ctx.stroke(); ctx.setLineDash([]);
+  }
+  if (game) {
+    ctx.fillStyle = "#fff";
+    game.trail.slice(-120).forEach(([tx, ty]) => { ctx.beginPath(); ctx.arc(sx(tx + .5), sy(ty + .5), 1.5, 0, 7); ctx.fill(); });
+    ctx.fillStyle = "rgb(120,255,160)";
+    game.jumpsAt.forEach(([jx, jy]) => { const px = sx(jx + .5), py = sy(jy); if (px >= 0 && px <= W) { ctx.beginPath(); ctx.moveTo(px, py + 6); ctx.lineTo(px - 5, py + 14); ctx.lineTo(px + 5, py + 14); ctx.fill(); } });
+  }
+  const dead = game && ["crash", "spike", "fell"].includes(game.status);
+  const px = sx(s.x), py = sy(s.y + 1);
+  ctx.fillStyle = dead ? "rgb(255,90,90)" : "rgb(250,210,40)"; ctx.fillRect(px, py, cell, cell);
+  ctx.strokeStyle = "rgb(60,40,0)"; ctx.lineWidth = 2; ctx.strokeRect(px + 1, py + 1, cell - 2, cell - 2);
+  ctx.fillStyle = "rgb(60,40,0)"; ctx.fillRect(px + cell * .55, py + cell * .25, cell * .25, cell * .2);
+  const span = lv.goal - 2, prog = Math.max(0, Math.min(1, (s.x - 2) / span));
+  ctx.fillStyle = "rgb(15,15,25)"; ctx.fillRect(0, Hp, W, HUD);
+  const bw = Math.max(40, W - 140);
+  ctx.fillStyle = "rgb(90,220,130)"; ctx.fillRect(8, Hp + 9, (bw - 8) * prog, 10);
+  ctx.strokeStyle = "rgb(160,160,190)"; ctx.lineWidth = 1; ctx.strokeRect(8.5, Hp + 9.5, bw - 8, 10);
+  const lab = {win: "¡NIVEL COMPLETO!", crash: "choque", spike: "pincho", fell: "caída"}[game ? game.status : ""] || "";
+  ctx.fillStyle = "rgb(235,235,245)"; ctx.font = "12px ui-monospace, Menlo, Consolas, monospace"; ctx.textBaseline = "middle";
+  ctx.fillText(`${Math.round(prog * 100)}% t=${s.t} ${lab}`, bw + 8, Hp + 14);
+}
+
+const typing = () => ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement && document.activeElement.tagName);
+window.addEventListener("keydown", e => {
+  if ((e.code === "Space" || e.code === "ArrowUp") && !typing() && !e.target.closest(".c") && !e.target.closest("button")) {
+    e.preventDefault();
+    if (!game || game.status !== "ok") { if (!e.repeat) newGame(); }
+    holding = true;
+  }
+});
+window.addEventListener("keyup", e => { if (e.code === "Space" || e.code === "ArrowUp") holding = false; });
+cv.tabIndex = 0;
+cv.addEventListener("pointerdown", e => { e.preventDefault(); if (!game || game.status !== "ok") newGame(); holding = true; });
+window.addEventListener("pointerup", () => { holding = false; });
+window.addEventListener("blur", () => { holding = false; });
+$("playBtn").addEventListener("click", () => { holding = false; newGame(); });
+new ResizeObserver(() => draw()).observe(cv);
+
+let saved = null;
+try { saved = JSON.parse(localStorage.getItem("gd-editor")); } catch (e) {}
+if (saved && Array.isArray(saved.grid) && saved.grid.length === H) load(saved.grid, saved.name);
+else load(blank(60), "facil");
+}
+</script>
+</body>
+</html>
