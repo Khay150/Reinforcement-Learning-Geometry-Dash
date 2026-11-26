@@ -15,6 +15,7 @@
 - `agents/evaluate.py`: `evaluate_policy_phases` (un episodio determinista por fase), `metrics`/`describe`, `save_rows`/`append_row` (CSV) y `summarize` (tabla markdown entre seeds).
 - `ejemplos/`: recompensas propias de ejemplo (`reward_ejemplo.py`, `reward_santi.py`). `niveles/`: conjuntos de niveles con pesos y validación para `--levels` (`ejemplo.json`, `santi.json`, `nacho.json`, y `nacho_progresion.json` con etapas).
 - `agents/runs.py`: `evaluate_and_record` (evalúa un modelo y deja su CSV y GIFs), compartido por `train.py` y `evaluate.py`.
+- `agents/plots.py` + `scripts/plot.py`: gráficos de las corridas (curvas de aprendizaje, evaluación, barras, progresión); ver "Gráficos para el informe". `scripts/difficulty_vs_performance.py`: cruza la dificultad de cada nivel con el desempeño del agente. `DOCUMENTACION.md`: explicación conceptual de todo el proyecto.
 - `scripts/run_oracle.py`, `scripts/record.py`, `scripts/difficulty.py` (tabla de dificultad de los niveles), `tests/test_env.py` (entorno, oráculo, términos de recompensa, callbacks), `tests/test_cnn.py` (extractores CNN con los 4 algoritmos), `tests/test_difficulty.py` y `tests/test_spike_down.py` (pincho colgante `v`).
 - `scripts/train.py`: entrena PPO/A2C/DQN/QR-DQN con varias seeds, evalúa y graba GIFs. `scripts/evaluate.py`: re-evalúa modelos guardados. `scripts/record.py --model ... --algo PPO`: GIF de un modelo suelto.
 
@@ -194,7 +195,7 @@ Regla práctica: la tasa por tick tiene que superar `c × saltos_por_tick` del n
 nunca conviene). En los niveles registrados el máximo es ~0.056 saltos por tick (`muy_dificil`: 15 saltos en 270 ticks; `level_1`: 13 en 520),
 así que `--survive-rate 0.1` deja margen y no hay que recalcularlo por nivel. Ejemplo: `--jump-penalty 0.05 --survive-rate 0.1 --survive-interval 20`
 da 0.1 × 0.05 × 20 = 0.1 cada 20 ticks. Si armás niveles con más de ~0.06 saltos por tick, subí `r`. Los valores se guardan en `config.json`
-y el run queda con sufijo `_sr0.1_si20` (o `_sb…_si…`).
+y el run queda con sufijo `_si20_sr0.1` (o `_sb…_si…`).
 
 ### Niveles registrados
 Todos viven en `gd_env/levels.py` (registro `LEVELS`), miden 7 de alto y 60 de largo (salvo `level_1`, de 110) y arrancan en `x = 2.0`.
@@ -328,6 +329,25 @@ python scripts/train.py --algos ppo --seeds 0 --timesteps 200000 \
   La exploración ε arranca en su valor final (0.05) en vez de 1.0, para no tirar lo aprendido jugando al azar.
 - Con `--ramp`, `c` vuelve a arrancar en 0 (la rampa es parte de la corrida nueva).
 - La corrida nueva se guarda en `runs/<run-name>_continuado/` (o con `--run-name`) y `config.json` registra `init_model`.
+### Gráficos para el informe (`scripts/plot.py`)
+Arma PNGs listos para diapositivas a partir de lo que deja cada corrida (no re-evalúa nada):
+```bash
+python scripts/plot.py runs/features_fixed runs/features_fixed_jp0.05 --labels "sin castigo" "c = 0.05"
+python scripts/plot.py runs/e1_algoritmos runs/e2_obs_grid --out figuras/e1 --tipo curvas barras
+```
+| `--tipo` | Figura | Sale de |
+|---|---|---|
+| `curvas` | `curva_{retorno,exito,progreso}.png` | `monitor/` (episodios de entrenamiento) |
+| `eval` | `eval_{exito,progreso}.png` | `eval_history.csv` (evaluación periódica; validación en otro panel) |
+| `barras` | `barras_{entrenamiento,validacion}.png` | `eval_fases*.csv` (modelo final y mejor modelo) |
+| `niveles` | `barras_niveles.png` | `eval_fases*.csv`, fases ganadas en cada nivel |
+| `progresion` | `progresion_<corrida>_<algo>.png` | `progresion.csv` (etapas, éxito y probabilidad de cada nivel) |
+| `penalizacion` | `penalizacion_salto.png` | `jump_penalty.csv` (sólo con `--ramp`) |
+
+Cada par (corrida, algoritmo) es una serie con su color; las seeds se promedian (banda: mín–máx entre seeds).
+Por defecto hace todas las que tengan datos y las guarda en `figuras/<corrida>/`. Sirve con corridas en curso
+(las curvas llegan hasta donde llegó cada seed) y saltea con un aviso lo que falta. Desde Python: `agents.plots.graficar(...)`.
+
 ### Uso de los agentes desde Python (por ejemplo, en Colab)
 ```python
 from agents import make_train_env, build_model, evaluate_policy_phases, summarize
@@ -392,7 +412,7 @@ Cada fila de `evaluate_policy_phases` tiene: `level, x0, success, progress, retu
 - `reset(options={"x0": ...})` cambia la fase de arranque: sirve para evaluar generalización sobre variaciones del nivel fijo. Probado con 20 fases: todas tienen solución.
 
 ## Oráculo
-Como x depende sólo del tick, el espacio de estados es un DAG por capas; se recorre con DP guardando los saltos mínimos. Devuelve el plan con **menos saltos** (13 en el nivel 1, jugable en 520 ticks, retorno 2.0). `plan.jump_x` da dónde saltar (útil para el timing reward), y `Oracle.is_winnable(state)` indica si un estado todavía es salvable.
+Como x depende sólo del tick, el espacio de estados es un DAG por capas; se recorre con DP guardando los saltos mínimos. Devuelve el plan con **menos saltos** (13 en el nivel 1, jugable en 520 ticks, retorno 2.0). `Oracle(level, physics).plan().jump_x` da dónde saltar (útil para el timing reward; `solve()` solo no lo completa), y `Oracle.is_winnable(state)` indica si un estado todavía es salvable.
 
 ## Dificultad de un nivel
 `scripts/difficulty.py` mide, con la física y sin entrenar, lo que acordamos como dificultad: **qué tan preciso tiene que ser
@@ -430,6 +450,18 @@ Funciona con cualquier nivel dibujable en ASCII, también con techos, plataforma
 x≈73), una cadena de 3 saltos (pozo → escalera, x≈45–52) y P(ganar al azar) ≈ 10^-4.6 en x0 = 2.0 (uno de cada ~40.000 episodios:
 por eso la política aleatoria de los tests no gana nunca). Los cortes entre fácil / medio / difícil los tenemos que acordar;
 `level_1` sirve de referencia.
+
+### ¿La dificultad predice cuánto le cuesta al agente? (`scripts/difficulty_vs_performance.py`)
+Cruza la dificultad de cada nivel con el desempeño de corridas entrenadas en **un solo nivel** (E7: `runs/e7_nivel_*`):
+`python scripts/difficulty_vs_performance.py 'runs/e7_nivel_*'` → `figuras/dificultad_vs_desempeno/` (`tabla.md`, CSVs y gráficos).
+- **Pasos hasta la 1ª victoria**: primer episodio de entrenamiento ganado (columna `success` de `monitor/*.csv`). Los entornos
+  avanzan juntos, así que un episodio que termina cuando su entorno lleva `k` pasos ocurrió en el paso `k × n_entornos`.
+- **Pasos hasta aprender**: primer momento en que se gana el 50% de los últimos 50 episodios de entrenamiento (`--umbral`, `--ventana`).
+- Una seed que nunca llega queda **censurada** en el total de pasos (triángulo hueco; "≥" en la tabla).
+- **Éxito / progreso final y del mejor modelo**: de `eval_fases.csv` y `eval_fases_best.csv` (10 fases).
+- La dificultad es la de `scripts/difficulty.py` (peor caso entre 10 fases; `--fases 1` = sólo x0 = 2.0).
+- Correlación de **Spearman** entre niveles (media entre seeds), con valor p por permutaciones; en el título de cada gráfico.
+- En los gráficos, más difícil siempre a la derecha. `--pares x:y` elige otros gráficos; `--incompletas` incluye seeds en curso.
 
 ## Nota para SB3
 `CnnPolicy` por defecto (NatureCNN) exige imágenes de al menos 36×36; la grilla (7×16) es más chica. Por eso `grid` y `dict` usan los extractores de `agents/cnn.py` (ver "Observaciones y CNN"); `obs_mode="features"` con `MlpPolicy` queda como baseline.
