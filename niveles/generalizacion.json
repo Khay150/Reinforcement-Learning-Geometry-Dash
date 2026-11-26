@@ -1,0 +1,17 @@
+{
+  "_nota": [
+    "E8, generalización: entrena en los 20 niveles restantes (mismo peso) y valida en 3 niveles que nunca ve,",
+    "uno fácil, uno medio y uno difícil según scripts/difficulty.py:",
+    "  santi_facil   (6 saltos, ventana mín. 8, log10 P(azar) -3.4)",
+    "  level_1       (13 saltos, ventana mín. 2, log10 P(azar) -4.6; es el de validación de E5 y E6)",
+    "  nacho_dificil (12 saltos, ventana mín. 3, cadena de 4, log10 P(azar) -8.8)",
+    "No se usa 'dificil' como el difícil porque muy_dificil es dificil + techo: estaría entrenando casi en el mismo nivel.",
+    "Hay niveles con techo o bloques flotantes que la observación 'features' no representa: correr con --obs dict."
+  ],
+  "niveles": ["nacho_facil", "nacho_medio", "nacho_muy_dificil",
+              "facil", "medio", "dificil", "muy_dificil", "muy_muy_dificil",
+              "franco_facil", "franco_medio", "franco_dificil", "franco_techo", "franco_rutas", "franco_tunel",
+              "franco_pasillos", "franco_sin_saltar",
+              "santi_intermedio_1", "santi_intermedio_2", "santi_intermedio_dificil", "santi_dificil"],
+  "validacion": ["santi_facil", "level_1", "nacho_dificil"]
+}
