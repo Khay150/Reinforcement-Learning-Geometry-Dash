@@ -1,0 +1,16 @@
+{
+  "timesteps": 25000,
+  "success": 0.0,
+  "progress": 0.12653,
+  "mean_jumps_won": null,
+  "success_santi_facil": 0.0,
+  "success_santi_intermedio_1": 0.0,
+  "success_santi_intermedio_2": 0.0,
+  "success_santi_intermedio_dificil": 0.0,
+  "success_santi_dificil": 0.0,
+  "train_jump_penalty": 0.05,
+  "val_success": 0.0,
+  "val_progress": 0.20881,
+  "val_mean_jumps_won": null,
+  "val_success_level_1": 0.0
+}
