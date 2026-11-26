@@ -1,0 +1,11 @@
+level,x0,success,progress,return,ticks,status,n_jumps,oracle_jumps,death_x
+dificil,2.0,0,0.1111,-9.8889,31,crash,3,14,8.0
+dificil,2.106,0,0.0741,-9.9279,20,crash,2,12,6.0
+dificil,2.211,0,0.0741,-9.9298,19,crash,2,12,6.0
+dificil,2.317,0,0.0741,-9.9318,19,crash,2,12,6.0
+dificil,2.422,0,0.0741,-9.9337,18,crash,2,12,6.0
+dificil,2.528,0,0.0741,-9.9357,18,crash,2,12,6.0
+dificil,2.633,0,0.0741,-9.9377,17,crash,2,12,6.0
+dificil,2.739,0,0.0741,-9.9396,17,crash,2,12,6.0
+dificil,2.844,0,0.0741,-9.9416,16,crash,1,12,6.0
+dificil,2.95,0,0.0741,-9.9435,16,crash,1,12,6.0
