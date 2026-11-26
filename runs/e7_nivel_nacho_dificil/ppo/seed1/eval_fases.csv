@@ -1,0 +1,11 @@
+level,x0,success,progress,return,ticks,status,n_jumps,oracle_jumps,death_x
+nacho_dificil,2.0,1,1.0,2.0,270,win,13,12,
+nacho_dificil,2.106,1,1.0,2.0,270,win,13,12,
+nacho_dificil,2.211,1,1.0,1.9963,269,win,13,12,
+nacho_dificil,2.317,1,1.0,1.9963,269,win,13,12,
+nacho_dificil,2.422,1,1.0,1.9926,268,win,13,12,
+nacho_dificil,2.528,1,1.0,1.9926,268,win,13,12,
+nacho_dificil,2.633,1,1.0,1.9889,267,win,13,12,
+nacho_dificil,2.739,1,1.0,1.9889,267,win,13,12,
+nacho_dificil,2.844,1,1.0,1.9852,266,win,13,12,
+nacho_dificil,2.95,1,1.0,1.9852,266,win,13,12,
